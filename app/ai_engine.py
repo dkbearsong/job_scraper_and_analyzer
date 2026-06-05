@@ -185,13 +185,12 @@ class OpenRouterProvider(BaseAIProvider):
 
 class LMStudioProvider(BaseAIProvider):
     """Local provider using LM Studio's OpenAI-compatible local server."""
-    def __init__(self, base_url="http://localhost:1234/v1", api_key="lm-studio"):
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
-
+    def __init__(self, base_url="http://localhost", port='1234', api_key="lm-studio"):
+        self.client = OpenAI(base_url=f'{base_url}:{port}/v1', api_key=api_key)
     def extract_structured_data(self, text: str) -> dict:
         try:
             response = self.client.chat.completions.create(
-                model="local-model", # LM Studio usually ignores this and uses the loaded model
+                model=os.getenv('EXTRACTION_MODEL', 'local-model'), # LM Studio usually ignores this and uses the loaded model
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
@@ -235,7 +234,7 @@ class AIEngine:
             "claude": ClaudeProvider,
             "gemini": GeminiProvider,
             "openrouter": OpenRouterProvider,
-            "lm_studio": LMStudioProvider
+            "lm_studio": LMStudioProvider(base_url=os.getenv('LMS_URL', 'http://localhost'),port=os.getenv('LMS_PORT', '1234'),api_key=os.getenv('LMS_API_KEY', 'lm-studio'))
         }
         
         provider_class = providers.get(name)

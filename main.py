@@ -496,7 +496,7 @@ async def main():
     if todays_jobs is None:
         todays_jobs = []
 
-    print(f"Starting extraction on {len(todays_jobs)} jobs...")
+    print(f"Starting regex extraction on {len(todays_jobs)} jobs...")
 
     for row in todays_jobs:
         raw_job = {
@@ -556,7 +556,8 @@ async def main():
             error_logger_continue(f"Warning: job at index {index} has no description")
             continue
 
-        ai_data = call_llm_for_extraction(ai, description, provider_name="claude")
+        # Extract skills, requirements and pass summary
+        ai_data = call_llm_for_extraction(ai, description, provider_name=os.getenv("EXTRACTION_LLM"))
         
         skills = []
         requirements = []
@@ -583,51 +584,50 @@ async def main():
         features['requirements'] = requirements or []
         features['summary'] = summary or ""
 
-        # 2. Embedding Generation (The "Vector" Pass)
-        # We use a specialized/cheaper model (ChatGPT/OpenAI) for high-dimensional vectors
+        # Vector Generation
         
+        # Vector 0: The "Title" Vector (Matches against candidate desired job titles)
+        title_text = features['title']
+        if title_text:
+            job['embeddings']['title_vector'] = generate_embeddings(ai, title_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
+        else:
+            job['embeddings']['title_vector'] = []
+
         # Vector A: The "Skills" Vector (Matches against candidate technical skills)
         skills_text = ", ".join(features['skills'])
         if skills_text:
-            job['embeddings']['skills_vector'] = generate_embeddings(ai, skills_text, provider_name="chatgpt")
+            job['embeddings']['skills_vector'] = generate_embeddings(ai, skills_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
         else:
             job['embeddings']['skills_vector'] = []
 
-        # Vector B: The "Context" Vector (Matches against candidate professional summary/experience)
+        # Vector B: The "Requirements" Vector (Matches against candidate resume responsibilities)
+        requirements_text = ", ".join(features['requirements'])
+        if requirements_text:
+            job['embeddings']['requirements_vector'] = generate_embeddings(ai, requirements_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
+        else:
+            job['embeddings']['requirements_vector'] = []
+
+        # Vector C: The "Context" Vector (Matches against candidate professional summary/experience)
         summary_text = features['summary']
         if summary_text:
-            job['embeddings']['description_vector'] = generate_embeddings(ai, summary_text, provider_name="chatgpt")
+            job['embeddings']['description_vector'] = generate_embeddings(ai, summary_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
         else:
             job['embeddings']['description_vector'] = []
 
-        # Small delay to respect API rate limits
         time.sleep(1) 
 
     print("AI/LLM Pass Complete.")
 
-    # === EMBEDDING GENERATION ===
-    print(f"Starting embedding generation for {len(processed_job_pool)} jobs...")
-    
-    # Generate embeddings for each job (this is where the guide's requirements should be met)
+    # Persist embedding vectors to database
+    print(f"Saving embeddings to database...")
     embedding_updates = []
-    for index, job in enumerate(processed_job_pool):
-        print(f"Generating embeddings for job {index + 1}/{len(processed_job_pool)}...")
-        
-        # Generate the embeddings according to guide specifications
-        job_embeddings = generate_job_embeddings(ai, job)
-        
-        # Store embedding data for later database insertion
-        if job_embeddings:
-            embedding_updates.append(job_embeddings)
-        
-        # Small delay to respect API rate limits
-        time.sleep(1) 
-
-    print("Embedding generation complete.")
-
+    for job in processed_job_pool:
+        embedding_updates.append(job.get('embeddings', {}))
     if embedding_updates:
-        print(f"Saving {len(embedding_updates)} new embeddings to 'job_embeddings'...")
         dp.save_job_embeddings(embedding_updates)
+        print(f"Saved {len(embedding_updates)} jobs' embeddings to 'job_embeddings'.")
+    else:
+        print("No embeddings to save.")
     
     # Update job records in database with extracted metadata
     print("Updating job records in database with metadata...")
