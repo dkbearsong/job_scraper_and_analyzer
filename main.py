@@ -12,6 +12,7 @@ import random
 import time
 import numpy as np
 import itertools
+import yaml
 from typing import Any
 
 # Modules
@@ -31,7 +32,7 @@ from app.llm_classifier import (
 ############################# Global Variables and Configs ############################
 load_dotenv()
 
-# Archetype Definitions (Stage 4)
+# Archetype Definitions
 with open(os.getenv("ARCHETYPES_CONFIG", ""), 'r') as file:
     ARCHETYPES_CONFIG = json.load(file)
 
@@ -148,95 +149,32 @@ def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
     Evaluates a job against hard constraints.
     Returns True if the job should be SKIPPED, False if it passes.
     """
-    # 1. Work Type Filter (e.g., Remote vs On-site)
-    # If user only wants 'Remote' and job is 'On-site', skip.
-    job_work_type = job['features'].get('work_type', '').lower()
+    job_work_type = job['features'].get('work_type', None).lower()
     user_work_types = [t.lower() for t in user_preferences.get('work_types', [])]
-    
-    if user_work_types and job_work_type not in user_work_types:
+    if user_work_types and job_work_type and job_work_type not in user_work_types:
         return True
 
-    # 2. Seniority Filter
-    # If user is looking for 'Senior' and job is 'Intern', skip.
-    job_seniority = job['features'].get('seniority', '').lower()
+    job_seniority = job['features'].get('seniority', None).lower()
     user_seniority_levels = [s.lower() for s in user_preferences.get('seniority_levels', [])]
-    
-    if user_seniority_levels and job_seniority not in user_seniority_levels:
+    if user_seniority_levels and job_seniority and job_seniority not in user_seniority_levels:
         return True
 
-    # 3. Pay/Salary Filter (Enhanced)
-    # Parse job pay range to compare with user preferences
     job_pay = job['features'].get('pay', "")
-    
-    # Parse pay ranges - this would ideally come from user configuration or profile
-    # For now, we can at least check if job pay is present and valid
-    
-    # Example implementation: Check that job has a salary range or can be processed
-    if not job_pay or job_pay == "Not Specified":
-        # If user has salary expectation but job doesn't specify pay, this could be filtered
-        pass  # For now, we'll allow jobs without explicit pay information
-    
-    # Pay range filtering - check if job's pay falls within user preferences
     target_pay_range = user_preferences.get('pay_range', '')
-    
-    # Only apply pay filter if there's a target range defined and job has pay data to check
-    if target_pay_range and job_pay:
-        try:
-            # Parse the user's target pay range (e.g., "50k-100k")
-            # Extract min and max values from user target pay range string
-            user_min_match = re.search(r'(\d+)(?:k|K)?', target_pay_range)
-            user_max_match = re.search(r'-(\d+)(?:k|K)?', target_pay_range)
-            
-            if user_min_match and user_max_match:
-                # Convert to integers (accounting for k notation)
-                user_min = int(user_min_match.group(1)) * 1000 if 'k' in target_pay_range.lower() else int(user_min_match.group(1))
-                user_max = int(user_max_match.group(1)) * 1000 if 'k' in target_pay_range.lower() else int(user_max_match.group(1))
-                
-                # Try to extract job pay values if present
-                job_min = None
-                job_max = None
-                
-                # Check for pay range in the actual job's pay string (e.g., "50k - 100k")
-                if isinstance(job_pay, str):
-                    job_matches = re.findall(r'(\d+)(?:k|K)?', job_pay)
-                    if len(job_matches) >= 2:
-                        # Take first two numbers as min and max
-                        job_min = int(job_matches[0]) * 1000 if 'k' in job_pay.lower() else int(job_matches[0])
-                        job_max = int(job_matches[1]) * 1000 if 'k' in job_pay.lower() else int(job_matches[1])
-                    elif len(job_matches) == 1:
-                        # If only one number, assume it's a min value (max will be same or None)
-                        job_min = int(job_matches[0]) * 1000 if 'k' in job_pay.lower() else int(job_matches[0])
-                
-                # If we have both min and max values, check if job pay range overlaps with user's target
-                if job_min is not None and job_max is not None:
-                    # Job pays at least the minimum of user's target and up to maximum of user's target
-                    if job_min >= user_min and job_max <= user_max:
-                        # Job pay is within user's target range - keep it
-                        pass  # Continue processing the job
-                    elif job_min < user_min and job_max < user_min:
-                        # Job is too low for user's target - skip
-                        return True
-                    elif job_min > user_max and job_max > user_max:
-                        # Job is too high for user's target - skip  
-                        return True
-                    else:
-                        # Partial overlap, allow job to continue (either min or max is in range)
-                        pass  # Continue processing
-                elif job_min is not None:
-                    # If we only have min, check if it's within target range
-                    if job_min >= user_min and job_min <= user_max:
-                        # Job is within target range - keep it
-                        pass  # Continue processing the job
-                    else:
-                        # Job min is outside user's target - skip  
-                        return True
-                        
-        except (ValueError, IndexError):
-            # If parsing fails for some reason, allow the job to continue processing
-            pass
+    if not job_pay or job_pay == "Not Specified":
+        pass
+    else:
+        if target_pay_range and job_pay:
+            try:
+                if filter_pay(target_pay_range, job_pay):
+                    return True                            
+            except (ValueError, IndexError):
+                # If parsing fails for some reason, allow the job to continue processing
+                error_logger_continue(f"Error in parsing pay range for job {job['id']}: {ValueError} at {IndexError}")
+                pass
 
     # 4. Timezone Filter
-    job_timezone = job['features'].get('timezone', "").lower()
+    job_timezone = job['features'].get('timezone', None).lower()
     user_timezones = [tz.lower() for tz in user_preferences.get('timezones', [])]
     
     if user_timezones and job_timezone and job_timezone not in user_timezones:
@@ -244,62 +182,35 @@ def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
 
     return False
 
-##################################### Embedding Functions ###########################################################################
+def filter_pay(target_pay_range, job_pay):
+    # Parse user's target pay range
+    user_min_match = re.search(r'(\d+)(?:k|K)?', target_pay_range)
+    user_max_match = re.search(r'-(\d+)(?:k|K)?', target_pay_range)
+    if not (user_min_match and user_max_match):
+        return None 
 
-def extract_responsibilities_from_description(description: str) -> str:
-    """Extract key responsibilities from a job description."""
-    # This is a simple implementation; expand with NLP/LLM logic if needed.
-    return description
+    user_min = convert_pay(user_min_match, target_pay_range)
+    user_max = convert_pay(user_max_match, target_pay_range)
 
+    job_min, job_max = None, None
+    if isinstance(job_pay, str):
+        matches = re.findall(r'(\d+)(?:k|K)?', job_pay)
+        if matches:
+            job_min = int(matches[0]) * 1000 if 'k' in job_pay.lower() else int(matches[0])
+        if len(matches) >= 2:
+            job_max = int(matches[1]) * 1000 if 'k' in job_pay.lower() else int(matches[1])
 
-def generate_job_embeddings(ai: AIEngine, job_data: dict) -> dict:
-    """
-    STAGE 4: EMBEDDING GENERATION
-    Converts semantic job sections into high-dimensional vectors.
-    Returns structured embedding data that can be stored in database.
-    """
+    if job_max is not None:
+        if job_min is None:
+            job_min = job_max
+        return True if job_max < user_min or job_min > user_max else False
+    if job_min is not None:
+        return False if user_min <= job_min <= user_max else True
+    return None  # Fallback if no job values could be parsed
 
-    job_embeddings = {
-        "job_id": job_data.get("metadata", {}).get("job_id"),
-        "title_embedding": None,
-        "skills_embedding": None,
-        "responsibilities_embedding": None,
-        "description_embedding": None
-    }
-
-    title = job_data.get("features", {}).get("title", "")
-    if title:
-        try:
-            job_embeddings["title_embedding"] = generate_embeddings(ai, title, provider_name="chatgpt")
-        except Exception as e:
-            print(f"Error generating title embedding: {e}")
-
-    skills = job_data.get("features", {}).get("skills", [])
-    if skills:
-        try:
-            skills_text = ", ".join(skills)
-            job_embeddings["skills_embedding"] = generate_embeddings(ai, skills_text, provider_name="chatgpt")
-        except Exception as e:
-            print(f"Error generating skills embedding: {e}")
-
-    # Responsibilities Embedding: Prioritize extracted bullet points for cleaner semantic mapping
-    description = job_data.get("features", {}).get("description", "")
-    requirements = job_data.get("features", {}).get("requirements", [])
-    
-    if description:
-        try:
-            responsibilities_text = "\n".join(requirements) if requirements else description
-            if responsibilities_text:
-                job_embeddings["responsibilities_embedding"] = generate_embeddings(ai, responsibilities_text, provider_name="chatgpt")
-        except Exception as e:
-            print(f"Error generating responsibilities embedding: {e}")
-
-        try:
-            job_embeddings["description_embedding"] = generate_embeddings(ai, description, provider_name="chatgpt")
-        except Exception as e:
-            print(f"Error generating description embedding: {e}")
-
-    return job_embeddings
+def convert_pay(match, context):
+    val = int(match.group(1))
+    return val * 1000 if 'k' in context.lower() else val
 
 ##################################### AI Functions #############################################################################
 
@@ -315,9 +226,92 @@ def generate_embeddings(ai: AIEngine, text: str, provider_name: str | None = Non
         return ai.embed(text)
     return ai.embed(text, provider_name=provider_name)
 
+def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cache_path: str) -> dict:
+    """
+    Extracts structured profile data (skills, requirements, summary) from a resume
+    or user profile using LLM extraction, with file-modification caching.
+
+    The cache stores a JSON file containing the extracted data and a timestamp.
+    If the source file has not been modified since the cache timestamp, the cached
+    data is returned. Otherwise, extraction is re-run and the cache is updated.
+
+    Args:
+        ai: The AIEngine instance used for LLM extraction.
+        source_path: Path to the .docx source file (used for mtime check).
+        raw_text: The already-loaded text content of the file.
+        cache_path: Path to the JSON cache file.
+
+    Returns:
+        dict with keys 'skills' (list), 'requirements' (list), 'summary' (str).
+    """
+    import json as _json
+    import os as _os
+
+    empty_result = {"skills": [], "requirements": [], "summary": ""}
+
+    # Check if source file exists
+    if not _os.path.exists(source_path):
+        print(f"Warning: profile source not found at {source_path}")
+        return empty_result
+
+    source_mtime = _os.path.getmtime(source_path)
+
+    # Try loading from cache if it exists and is newer than source
+    if _os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'r') as f:
+                cache = _json.load(f)
+            cache_time = cache.get('timestamp', 0)
+            if cache_time >= source_mtime:
+                print(f"Using cached profile from {cache_path}")
+                return cache.get('data', empty_result)
+        except Exception as e:
+            print(f"Warning: failed to read profile cache {cache_path}: {e}")
+
+    if not raw_text:
+        print(f"Warning: empty text in {source_path}")
+        return empty_result
+
+    # Run LLM extraction
+    print(f"Extracting profile data from {source_path}...")
+    ai_data = call_llm_for_extraction(ai, raw_text, provider_name=os.getenv("EXTRACTION_LLM"))
+    
+    result = empty_result
+    if isinstance(ai_data, dict):
+        result = {
+            "skills": ai_data.get('skills', []),
+            "requirements": ai_data.get('requirements', []),
+            "summary": ai_data.get('summary', ""),
+        }
+    elif isinstance(ai_data, str):
+        try:
+            parsed = _json.loads(ai_data)
+            if isinstance(parsed, dict):
+                result = {
+                    "skills": parsed.get('skills', []),
+                    "requirements": parsed.get('requirements', []),
+                    "summary": parsed.get('summary', ""),
+                }
+        except Exception:
+            pass
+
+    # Write to cache
+    try:
+        cache_dir = _os.path.dirname(cache_path)
+        if cache_dir and not _os.path.exists(cache_dir):
+            _os.makedirs(cache_dir, exist_ok=True)
+        with open(cache_path, 'w') as f:
+            _json.dump({"timestamp": source_mtime, "data": result}, f, indent=2)
+        print(f"Cached profile data to {cache_path}")
+    except Exception as e:
+        print(f"Warning: failed to write profile cache {cache_path}: {e}")
+
+    return result
+
 ##################################### Main ######################################################################################
 
 async def main():
+    # === Initial Setup ===
     # Load .env variables
     resume = load_resume_as_text("RESUME")
     user_profile = load_resume_as_text("PROFILE")
@@ -362,6 +356,8 @@ async def main():
         format='%(asctime)s:%(levelname)s:%(message)s'
     )
     
+    # === Scrape from Company Boards ===
+
     # Pull in the site strategies based on the sites pulled from the sites file
     site_strategies = []
     data = []
@@ -403,20 +399,17 @@ async def main():
                     data.append(d)
     print(f"Total jobs scraped: {len(data)}")
 
-    # Load in the latest pulled in jobs
     dp.load_scraped_data_to_db(data)
-    
-    # clear variables from data
 
     del data, site_strategies, sites, sites_file, strategy
 
-    # run searches on job boards and load them
+    # === Run Searches on Job Boards ===
    
     job_board_list = ["indeed", "linkedin", "zip_recruiter", "google"]
 
-    ## build proxy list
+    # Build proxy list
 
-    ## Build search terms
+    # Build search terms
     search_terms_file = os.getenv("SEARCH_TERMS", "")
 
     if not search_terms_file:
@@ -427,7 +420,7 @@ async def main():
         with open(search_terms_file, mode='r', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
-                if row:  # Ensure the row is not empty
+                if row:
                     search_terms.append(row[0])
         
         if not search_terms:
@@ -436,10 +429,17 @@ async def main():
     except Exception as e:
         error_logger_crash(f"Failed to load search terms from {search_terms_file}: {e}")
    
-    ## loop over site list
+    # loop over site list
+    prefs_yaml_path = os.getenv("USER_PREFERENCES_YAML", "")
+    if prefs_yaml_path:
+        with open(prefs_yaml_path, 'r') as f:
+            user_preferences = yaml.safe_load(f)
+    else:
+        user_preferences = {}
+    
     jobs = []
     requests_wanted = 200
-    target_cities = json.loads(os.getenv("TARGET_CITIES", "[]"))
+    target_cities = user_preferences.get('target_cities', [])
     
     delay = {
         "min": 1,
@@ -480,10 +480,10 @@ async def main():
 
     time.sleep(random.uniform(delay['min'], delay['max']))
 
-    ## Load into db
+    # Load into db
     dp.load_scraped_data_to_db(jobs)
 
-    # EMBEDDING GENERATION (Constraint: Only new jobs should be embedded)
+    # === EMBEDDING GENERATION (Constraint: Only new jobs should be embedded) ===
     pull_jobs_sql = """
     SELECT j.id, j.job_name, j.description, j.seniority, j.pay_range, j.timezone
     FROM job j
@@ -517,7 +517,6 @@ async def main():
         salary = raw_job['pay_range'] if raw_job['pay_range'] else tp.extract_salary(raw_job["description"])
         timezone = raw_job['timezone'] if raw_job['timezone'] else tp.detect_timezone(raw_job["description"])
 
-        # Structure the Data
         extracted_data = {
             "metadata": {
                 "job_id": raw_job["id"],
@@ -568,7 +567,6 @@ async def main():
             requirements = ai_data.get('requirements', [])
             summary = ai_data.get('summary', "")
         elif isinstance(ai_data, str):
-            # try to parse JSON string
             try:
                 parsed = json.loads(ai_data)
                 if isinstance(parsed, dict):
@@ -586,28 +584,24 @@ async def main():
 
         # Vector Generation
         
-        # Vector 0: The "Title" Vector (Matches against candidate desired job titles)
         title_text = features['title']
         if title_text:
             job['embeddings']['title_vector'] = generate_embeddings(ai, title_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
         else:
             job['embeddings']['title_vector'] = []
 
-        # Vector A: The "Skills" Vector (Matches against candidate technical skills)
         skills_text = ", ".join(features['skills'])
         if skills_text:
             job['embeddings']['skills_vector'] = generate_embeddings(ai, skills_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
         else:
             job['embeddings']['skills_vector'] = []
 
-        # Vector B: The "Requirements" Vector (Matches against candidate resume responsibilities)
         requirements_text = ", ".join(features['requirements'])
         if requirements_text:
             job['embeddings']['requirements_vector'] = generate_embeddings(ai, requirements_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
         else:
             job['embeddings']['requirements_vector'] = []
 
-        # Vector C: The "Context" Vector (Matches against candidate professional summary/experience)
         summary_text = features['summary']
         if summary_text:
             job['embeddings']['description_vector'] = generate_embeddings(ai, summary_text, provider_name=os.getenv("EMBEDDINGS_LLM"))
@@ -622,8 +616,15 @@ async def main():
     print(f"Saving embeddings to database...")
     embedding_updates = []
     for job in processed_job_pool:
-        embedding_updates.append(job.get('embeddings', {}))
-    if embedding_updates:
+        emb = job.get('embeddings', {})
+        embedding_updates.append({
+            "job_id": job['metadata']['job_id'],
+            "title_embedding": emb.get('title_vector'),
+            "skills_embedding": emb.get('skills_vector'),
+            "responsibilities_embedding": emb.get('requirements_vector'),
+            "description_embedding": emb.get('description_vector'),
+        })
+    if embedding_updates: 
         dp.save_job_embeddings(embedding_updates)
         print(f"Saved {len(embedding_updates)} jobs' embeddings to 'job_embeddings'.")
     else:
@@ -631,8 +632,7 @@ async def main():
     
     # Update job records in database with extracted metadata
     print("Updating job records in database with metadata...")
-    
-    # Prepare list of updates for the database
+  
     job_updates = []
     for job in processed_job_pool:
         update_data = {
@@ -644,64 +644,66 @@ async def main():
         }
         job_updates.append(update_data)
     
-    # Update the database with metadata
     dp.update_job_metadata(job_updates)
     print(f"Successfully updated {len(job_updates)} job records with metadata.")
 
-    # Rule Filtering
+    # === Rule Filtering ===
 
     print(f"Starting Rule-Based Filtering on {len(processed_job_pool)} jobs...")
-    
-    # Define user preferences (In a real app, these come from the 'PROFILE' docx)
-    # For now, we simulate what was extracted from the profile.
-    user_preferences = {
-        "work_types": json.loads(os.getenv("WORK_TYPES", "[]")),
-        "seniority_levels": json.loads(os.getenv("SENIORITY_LEVELS", "[]")),
-        "timezones": json.loads(os.getenv("TIMEZONES", "[]")),
-        "pay_range": os.getenv("TARGET_PAY_RANGE", "")  # Example: "50k-100k" or similar
-    }
 
     for job in processed_job_pool:
-        # Apply the rules
-        should_skip = apply_rule_filters(job, user_preferences)
-        
-        # Add the skip flag to the job object
-        job['skip'] = should_skip
-
-    # Filter out skipped jobs for the next stage (Vector Scoring)
-    # We keep them in the list but marked, so we can update the DB later.
+        job['skip'] = apply_rule_filters(job, user_preferences)
     print(f"Filtering complete. {sum(1 for j in processed_job_pool if j['skip'])} jobs skipped.")
 
-    # --- DATABASE SYNC: Update SQL with Skip Status ---
+    # === DATABASE SYNC: Update SQL with Skip Status ===
     print("Syncing skip status to database...")
     
-    # We need to collect IDs of skipped jobs to perform a bulk update
     skipped_ids = [job['metadata']['job_id'] for job in processed_job_pool if job.get('skip')]
-    
     if skipped_ids:
-        # We will implement this method in DataPuller
         dp.bulk_update_skip_status(skipped_ids)
         print(f"Successfully updated {len(skipped_ids)} jobs in database as 'skipped'.")
     else:
         print("No jobs to skip in database.")
-
-    # Proceed only with non-skipped jobs for the expensive Vector Scoring
     active_job_pool = [j for j in processed_job_pool if not j.get('skip')]
     
     print(f"Proceeding to Vector Scoring with {len(active_job_pool)} active jobs.")
 
     # === Archetype Engine Integration ===
     
-    # Initialize the archetype manager 
     archetype_manager = ArchetypeManager()
-    
-    # Multi-Archetype Support with Caching (Stage 4)
     print("Synchronizing candidate archetypes and benchmarks...")
     
-    # Add Resume and User Profile to the pool
+    # Extract structured profile data using LLM with file-modification caching
+    resume_data = extract_and_cache_profile(
+        ai,
+        os.getenv("RESUME", ""),
+        resume,
+        "archetype_profiles/resume_cache.json"
+    )
+    profile_data = extract_and_cache_profile(
+        ai,
+        os.getenv("PROFILE", ""),
+        user_profile,
+        "archetype_profiles/user_profile_cache.json"
+    )
+
     all_archetypes = ARCHETYPES_CONFIG + [
-        {"name": "Resume", "title": "Resume", "skills": "", "responsibilities": resume, "type": "resume"},
-        {"name": "User Profile", "title": "User Profile", "skills": "", "responsibilities": user_profile, "type": "user_profile"}
+        {
+            "name": "Resume",
+            "title": ", ".join(resume_data.get("skills", [])),
+            "skills": "\n".join(resume_data.get("skills", [])),
+            "responsibilities": "\n".join(resume_data.get("requirements", [])),
+            "summary": resume_data.get("summary", ""),
+            "type": "resume"
+        },
+        {
+            "name": "User Profile",
+            "title": ", ".join(profile_data.get("skills", [])),
+            "skills": "\n".join(profile_data.get("skills", [])),
+            "responsibilities": "\n".join(profile_data.get("requirements", [])),
+            "summary": profile_data.get("summary", ""),
+            "type": "user_profile"
+        }
     ]
 
     for arch_config in all_archetypes:
