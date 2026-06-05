@@ -108,7 +108,10 @@ class DataPuller:
                     "company": str,
                     "location": str,
                     "link": str,
-                    "pay": str (optional)
+                    "pay": str (optional),
+                    "description": str (optional),
+                    "city": str (optional),
+                    "state": str (optional)
                 }
             ]
         '''
@@ -134,7 +137,12 @@ class DataPuller:
             if offices:
                 office_id = offices[0][0]
             else:
-                result = self.conn.insert("office", {"company_id": company_id, "location": item.get('location')}, returning=["id"])
+                office_data = {"company_id": company_id, "location": item.get('location')}
+                if item.get('city'):
+                    office_data['city'] = item['city']
+                if item.get('state'):
+                    office_data['state'] = item['state']
+                result = self.conn.insert("office", office_data, returning=["id"])
                 if result and isinstance(result, (list, tuple)) and len(result) > 0 and len(result[0]) > 0:
                     office_id = result[0][0]
                 else:
@@ -165,7 +173,7 @@ class DataPuller:
             }
             
             if item.get('description'):
-                insert_data['description'] = item['description']
+                insert_data['job_summary'] = item['description']
 
             if 'pay' in item:
                 insert_data['pay'] = item['pay']

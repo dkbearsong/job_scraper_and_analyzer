@@ -43,13 +43,16 @@ class TextProcessor:
         }
 
     def get_section_content(self, text: str, header_name: str) -> str:
-        """Extracts a block of text belonging to a specific header."""
+        """Extracts a block of text belonging to a specific header from markdown text."""
         pattern = rf"{re.escape(header_name)}[:\n\r]+([\s\S]*?)(?=\n[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*[:\n]|\Z)"
         match = re.search(pattern, text, re.IGNORECASE if not self.case_sensitive else 0)
         return match.group(1).strip() if match else ""
 
     def clean_list_from_text(self, text: str) -> list:
-        """Converts a block of text into a clean list of strings."""
+        """
+        Converts a block of text into a clean list of strings. Helpful for vecotirzation
+        This removes bullets like "- " or "* "
+        """
         lines = text.split('\n')
         cleaned = []
         for line in lines:
@@ -62,11 +65,11 @@ class TextProcessor:
     def detect_work_type(self, text: str) -> str:
         """Identifies Remote, Hybrid, or Onsite via keyword matching."""
         text = self._prepare_text(text)
-        if re.search(r'\bremote\b|\bwork from home\b|\bfreely remote\b', text):
+        if re.search(r'\bremote\b|\bwork[ -]from[ -]home\b|\bfreely[ -]remote\b|\bwork[ -]from[ -]anywhere\b|\bvirtual[ -]role\b|\bhome[ -]based\b|\bhome[ -]office\b|\bremote[ -]first\b|\bremote[ -]friendly\b|\blocation[ -]independent', text):
             return "Remote"
-        if re.search(r'\bhybrid\b', text):
+        if re.search(r'\bhybrid\b|\bdays[ -]in[ -]office\b|\bdays[ -]remote\b|\bcore[ -]days\b|\bad[ -]hoc', text):
             return "Hybrid"
-        if re.search(r'\bonsite\b|\boffice\b', text):
+        if re.search(r'\bonsite\b|\bon[ -]site\b|\boffice[ -]based\b|\bin[ -]person', text):
             return "Onsite"
         return "Unknown"
 
@@ -77,7 +80,7 @@ class TextProcessor:
         rules = {
             "C-Suite": r'c-suite|executive|vp|vice president|chief officer',
             "Management": r'manager|director|head of|lead',
-            "Senior": r'senior|sr\.|principal|staff',
+            "Senior": r'senior|sr\.|sr |principal|staff',
             "Mid-Level": r'intermediate|mid-level|specialist',
             "Junior": r'junior|jr\.|entry level|associate|intern'
         }
@@ -93,4 +96,76 @@ class TextProcessor:
         match = re.search(pattern, text)
         if match:
             return match.group(1)
+        return "Not Specified"
+
+    def detect_timezone(self, text: str) -> str:
+        """
+        Identifies timezone mentions in job descriptions.
+        Looks for explicit timezone abbreviations, UTC offsets, and location
+        references commonly used to indicate target timezone.
+        Returns the detected timezone string or 'Not Specified'.
+        """
+        text_lower = text.lower()
+
+        # 1. Check for explicit timezone abbreviations
+        # Ordered roughly by prevalence in US job postings
+        timezone_keywords = {
+            "EST": r'\best\b',
+            "EDT": r'\bedt\b',
+            "ET":   r'\bet\b.*?(?:time|zone|hours)',
+            "CST": r'\bcst\b',
+            "CDT": r'\bcdt\b',
+            "CT":   r'\bct\b.*?(?:time|zone|hours)',
+            "MST": r'\bmst\b',
+            "MDT": r'\bmdt\b',
+            "MT":   r'\bmt\b.*?(?:time|zone|hours)',
+            "PST": r'\bpst\b',
+            "PDT": r'\bpdt\b',
+            "PT":   r'\bpt\b.*?(?:time|zone|hours)',
+            "GMT": r'\bgmt\b',
+            "UTC": r'\butc\b',
+            "CET": r'\bcet\b',
+            "IST": r'\bist\b',
+            "AEST": r'\baest\b',
+            "AEDT": r'\baedt\b',
+        }
+
+        # Try explicit abbreviation matches first
+        for tz, pattern in timezone_keywords.items():
+            if re.search(pattern, text_lower):
+                return tz
+
+        # 2. Check for UTC offset patterns like "UTC-5", "UTC+1", "GMT-4"
+        utc_offset_match = re.search(r'(?:utc|gmt)\s?[+-]\d{1,2}(?::?(?:00|30))?', text_lower)
+        if utc_offset_match:
+            return utc_offset_match.group(0).upper()
+
+        # 3. Look for phrases that indicate the timezone requirement
+        tz_phrases = [
+            (r'must be (?:in|within|located in|based in) (?:the )?(?:us|usa|united states).*?(?:timezone|time|hours)', 'US Timezone'),
+            (r'work (?:in|within) (?:the )?(?:eastern|central|mountain|pacific) (?:time|timezone)', None),
+            (r'(?:eastern|central|mountain|pacific) (?:time|timezone)\s*(?:hours|preferred|required|standard)?', None),
+        ]
+
+        for phrase, fallback in tz_phrases:
+            match = re.search(phrase, text_lower)
+            if match:
+                result = match.group(0)
+                # Convert the matched phrase back into a clean timezone name
+                if 'eastern' in result:
+                    return 'ET'
+                elif 'central' in result:
+                    return 'CT'
+                elif 'mountain' in result:
+                    return 'MT'
+                elif 'pacific' in result:
+                    return 'PT'
+                if fallback:
+                    return fallback
+
+        # 4. Check for global timezone phrases
+        global_tz = re.search(r'work (?:from )?(?:anywhere|globally|worldwide)|(?:any|all) (?:timezone|time zone)', text_lower)
+        if global_tz:
+            return 'Any'
+
         return "Not Specified"

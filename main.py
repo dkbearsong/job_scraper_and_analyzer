@@ -11,43 +11,43 @@ import logging
 import random
 import time
 import numpy as np
+import itertools
+from typing import Any
 
 # Modules
 from app.pull_data import DataPuller
 from app.text_engine import TextProcessor
 from app.ai_engine import AIEngine
-from app.archetype_engine import ArchetypeManager
+from app.archetype_engine import ArchetypeManager, Archetype
+from app.llm_classifier import (
+    CheapLLMClassifier,
+    StrongLLMReranker,
+    process_stage_6,
+    process_stage_7,
+    process_stage_8
+)
 
 
-# Global Variables
+############################# Global Variables and Configs ############################
 load_dotenv()
 
 # Archetype Definitions (Stage 4)
-ARCHETYPES_CONFIG = [
-    {
-        "name": "AI Tooling Engineer",
-        "title": "Senior AI Tooling Engineer",
-        "skills": "Python OpenAI LangChain Pinecone PyTorch LLMs",
-        "responsibilities": "Develop AI-powered tools. Integrate LLMs into workflows. Optimize inference pipelines."
-    },
-    {
-        "name": "Backend Python Engineer",
-        "title": "Senior Backend Python Engineer",
-        "skills": "Python FastAPI PostgreSQL AWS Redis Docker",
-        "responsibilities": "Design scalable APIs. Optimize database performance. Deploy cloud services."
-    },
-    {
-        "name": "Automation Engineer",
-        "title": "QA Automation Engineer",
-        "skills": "Python Selenium Pytest Playwright Jenkins CI/CD",
-        "responsibilities": "Write automated test suites. Maintain CI pipelines."
-    }
-]
+with open(os.getenv("ARCHETYPES_CONFIG", ""), 'r') as file:
+    ARCHETYPES_CONFIG = json.load(file)
 
+############################## Error Handlers #########################################
 
+def error_logger_crash(error_msg):
+    print(error_msg)
+    logging.error(error_msg)
+    raise ValueError(error_msg)
+
+def error_logger_continue(error_msg):
+    print(error_msg)
+    logging.error(error_msg)
+    return
 
 ############################## Helper Functions #######################################
-
 def load_resume_as_text(type):
     # doc = Document(input("Provide the path for the resume file to use: "))
     doc = Document(os.getenv(type))
@@ -244,7 +244,7 @@ def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
 
     return False
 
-##################################### Embedding Functions ######################################
+##################################### Embedding Functions ###########################################################################
 
 def extract_responsibilities_from_description(description: str) -> str:
     """Extract key responsibilities from a job description."""
@@ -301,7 +301,7 @@ def generate_job_embeddings(ai: AIEngine, job_data: dict) -> dict:
 
     return job_embeddings
 
-##################################### AI Functions #############################################
+##################################### AI Functions #############################################################################
 
 def call_llm_for_extraction(ai: AIEngine, text: str, provider_name: str | None = None) -> dict:
     """Uses the provided AI engine to extract structured data."""
@@ -315,47 +315,12 @@ def generate_embeddings(ai: AIEngine, text: str, provider_name: str | None = Non
         return ai.embed(text)
     return ai.embed(text, provider_name=provider_name)
 
-##################################### Main #####################################################
+##################################### Main ######################################################################################
 
 async def main():
     # Load .env variables
     resume = load_resume_as_text("RESUME")
     user_profile = load_resume_as_text("PROFILE")
-
-    # Extract skills and job titles from profile
-    tp = TextProcessor()
-
-    ai = AIEngine(default_provider_name="lm_studio") 
-    
-    # 1. Isolate the raw text blocks for each section
-    skills_raw = tp.get_section_content(user_profile, "Skills")
-    titles_raw = tp.get_section_content(user_profile, "Job Titles")
-
-    # 2. Clean the blocks into lists of strings for vectorization
-    # This removes bullets like "- " or "* " so you only embed the actual text.
-    skills = tp.clean_list_from_text(skills_raw)
-    job_titles = tp.clean_list_from_text(titles_raw)
-
-    # Generate embeddings for candidate data
-    print("Generating embeddings for candidate skills and job titles...")
-    
-    # Generate embedding for skills (to be used in similarity matching later)
-    if skills:
-        skill_embeddings = generate_embeddings(ai, ", ".join(skills), provider_name="chatgpt")
-    else:
-        skill_embeddings = []
-        
-    # Generate embedding for job titles (to be used in similarity matching later)
-    if job_titles:
-        title_embeddings = generate_embeddings(ai, ", ".join(job_titles), provider_name="chatgpt")
-    else:
-        title_embeddings = []
-
-    # Debugging output to verify extraction
-    print(f"--- Profile Extraction ---")
-    print(f"Extracted {len(skills)} skills: {skills}")
-    print(f"Extracted {len(job_titles)} job titles: {job_titles}")
-    print(f"---------------------------\n")
 
     # Create Data Puller Object
     dp = DataPuller(
@@ -364,13 +329,6 @@ async def main():
         password = os.getenv("DB_PASSWORD", ""),
         host = os.getenv("DB_HOST", "localhost"),
         port = os.getenv("DB_PORT", "5432")
-    )
-
-    # Configure logging
-    logging.basicConfig(
-        filename='app_error.log', 
-        level=logging.ERROR,
-        format='%(asctime)s:%(levelname)s:%(message)s'
     )
 
     # Get sites file from .env and pulls the sites in. Needs to be a csv set up with name and site columns
@@ -382,29 +340,43 @@ async def main():
     sites_file = os.getenv("JOB_SITES","")
     sites = dp.load_sites_list(sites_file)
     print("Sites Retrieved")
+
+    # Extract skills and job titles from profile
+    tp = TextProcessor()
+    ai = AIEngine(default_provider_name="lm_studio") 
+    skills_raw = tp.get_section_content(user_profile, "Skills")
+    titles_raw = tp.get_section_content(user_profile, "Job Titles")
+    skills = tp.clean_list_from_text(skills_raw)
+    job_titles = tp.clean_list_from_text(titles_raw)
+
+    # Debugging output to verify extraction
+    print(f"--- Profile Extraction ---")
+    print(f"Extracted {len(skills)} skills: {skills}")
+    print(f"Extracted {len(job_titles)} job titles: {job_titles}")
+    print(f"---------------------------\n")
+
+    # Configure logging
+    logging.basicConfig(
+        filename='app_error.log', 
+        level=logging.ERROR,
+        format='%(asctime)s:%(levelname)s:%(message)s'
+    )
     
     # Pull in the site strategies based on the sites pulled from the sites file
     site_strategies = []
     data = []
-    for i in range(len(sites['name'])): # type: ignore
+    for i in range(len(sites['name'])):
         strategy = {
-            "company": sites['name'][i], # type: ignore
-            "site": sites['site'][i], # type: ignore
-            "strategy": dp.load_site_strategies(f"./site_strategies/{sites['name'][i]}.json"), # type: ignore
+            "company": sites['name'][i],
+            "site": sites['site'][i],
+            "strategy": dp.load_site_strategies(f"./site_strategies/{sites['name'][i]}.json"),
             "api_method": "",
         }
 
-        if strategy['strategy'].get('pagination') is not None:
-            strategy['api_method'] = "extract-paginated"
-        elif strategy['strategy'].get("js_config") is not None:
-            strategy['api_method'] = "extract-js"
-        else:
-            strategy['api_method'] = "extract"
+        strategy['api_method'] = "extract-paginated" if strategy['strategy'].get('pagination') is not None else ("extract-js" if strategy['strategy'].get("js_config") is not None else "extract")  
         print(f"Company: {strategy['company']} | API method: {strategy['api_method']}")
         site_strategies.append(strategy)
     print("Site strategies loaded.")
-
-    # Job descriptions are now properly scraped with description field processing
 
     # Scrape the jobs from the sites using the link to the sites and the attached strategy. Fields should be set to return matching amount of records.
     for i in site_strategies:
@@ -448,10 +420,7 @@ async def main():
     search_terms_file = os.getenv("SEARCH_TERMS", "")
 
     if not search_terms_file:
-        error_msg = "Error: SEARCH_TERMS environment variable is empty or not provided."
-        print(error_msg)
-        logging.error(error_msg)
-        raise ValueError(error_msg)
+        error_logger_crash("Error: SEARCH_TERMS environment variable is empty or not provided.")
 
     try:
         search_terms = []
@@ -462,75 +431,59 @@ async def main():
                     search_terms.append(row[0])
         
         if not search_terms:
-            raise ValueError("The provided CSV file is empty.")
+            error_logger_crash("The provided CSV file is empty.")
             
     except Exception as e:
-        error_msg = f"Failed to load search terms from {search_terms_file}: {e}"
-        print(error_msg)
-        logging.error(error_msg)
-        raise    
+        error_logger_crash(f"Failed to load search terms from {search_terms_file}: {e}")
    
     ## loop over site list
     jobs = []
     requests_wanted = 200
     target_cities = json.loads(os.getenv("TARGET_CITIES", "[]"))
-
-    """
-    "source": site,
-    "title": title,
-    "link": job_url,
-    "company": company,
-    "pay": f"min_amount - max_amount interval"
-    "description": description,
-    "city": city,
-    "state": state
-    """
     
     delay = {
         "min": 1,
         "max": 4
     }
 
-    for board in job_board_list:
-        for st in search_terms:
-            for location in target_cities:
-                kwa = {}
-                if board == "google":
-                    kwa["google_search_term"] = st
-                elif board == "indeed":
-                    kwa["search_terms"] = st
-                    kwa["country_indeed"] = 'USA'
-                elif board == "linkedin":
-                    kwa["search_terms"] = st
-                    kwa["linkedin_fetch_description"] = True
-                else:
-                    kwa["search_terms"] = st
-                jobs_list = scrape_jb(board, location, requests_wanted, 24, **kwa)
+    for board, st, location in itertools.product(job_board_list, search_terms, target_cities):
+        # 1. Build kwargs based on board type
+        kwa = {}
+        if board == "google":
+            kwa["google_search_term"] = st
+        elif board == "indeed":
+            kwa["search_terms"] = st
+            kwa["country_indeed"] = "USA"
+        elif board == "linkedin":
+            kwa["search_terms"] = st
+            kwa["linkedin_fetch_description"] = True
+        else:
+            kwa["search_terms"] = st
+
+        # 2. Fetch and process jobs in a single loop
+        for i in scrape_jb(board, location, requests_wanted, 24, **kwa):
+            if isinstance(i, dict):
+                job = {
+                    "source": i.get('site'),
+                    "title": i.get('title'),
+                    "link": i.get('job_url'),
+                    "company": i.get('company'),
+                    "pay": f"{i.get('min_amount', '')} - {i.get('max_amount', '')} {i.get('interval', '')}".strip(),
+                    "description": i.get('description'),
+                    "city": i.get('city'),
+                    "state": i.get('state')
+                }
+            else:
+                job = {"source": None, "title": None, "link": None, "company": None, "pay": "", "description": None, "city": None, "state": None}
                 
-                njl = []
-                for i in jobs_list:
-                    # use dict.get to avoid __getitem__ type issues when i is typed as Hashable
-                    job = {
-                        "source": i.get('site') if isinstance(i, dict) else None,
-                        "title": i.get('title') if isinstance(i, dict) else None,
-                        "link": i.get('job_url') if isinstance(i, dict) else None,
-                        "company": i.get('company') if isinstance(i, dict) else None,
-                        "pay": f"{i.get('min_amount') if isinstance(i, dict) else ''}- {i.get('max_amount') if isinstance(i, dict) else ''} {i.get('interval') if isinstance(i, dict) else ''}",
-                        "description": i.get('description') if isinstance(i, dict) else None,
-                        "city": i.get('city') if isinstance(i, dict) else None,
-                        "state": i.get('state') if isinstance(i, dict) else None
-                    }
-                    njl.append(job)
-                
-                jobs.extend(njl)
-                time.sleep(random.uniform(delay['min'], delay['max']))
+            jobs.append(job)
+
+    time.sleep(random.uniform(delay['min'], delay['max']))
 
     ## Load into db
-    dp.load_scraped_data_to_db(jobs) # Need to update this function to include description, city, and state
+    dp.load_scraped_data_to_db(jobs)
 
-    # Normalize and Extract Metadata
-
-    # STAGE 4: EMBEDDING GENERATION (Constraint: Only new jobs should be embedded)
+    # EMBEDDING GENERATION (Constraint: Only new jobs should be embedded)
     pull_jobs_sql = """
     SELECT j.id, j.job_name, j.description, j.seniority, j.pay_range, j.timezone
     FROM job j
@@ -539,8 +492,7 @@ async def main():
     """
 
     todays_jobs = dp.pull_data_db(pull_jobs_sql)
-    processed_job_pool = []
-
+    processed_job_pool: list[Any] = []
     if todays_jobs is None:
         todays_jobs = []
 
@@ -555,14 +507,15 @@ async def main():
             "pay_range": row['pay_range'],
             "timezone": row['timezone']
         }
-
         if not raw_job["description"] or len(raw_job["description"]) < 50:
+            error_logger_continue(f"Warning: insufficient or missing description for job ID {raw_job['id']}")
             continue
 
         # Deterministic Extraction 
         work_type = tp.detect_work_type(raw_job["description"])
         seniority = tp.detect_seniority(raw_job["description"])
-        salary = tp.extract_salary(raw_job["description"])
+        salary = raw_job['pay_range'] if raw_job['pay_range'] else tp.extract_salary(raw_job["description"])
+        timezone = raw_job['timezone'] if raw_job['timezone'] else tp.detect_timezone(raw_job["description"])
 
         # Structure the Data
         extracted_data = {
@@ -573,10 +526,10 @@ async def main():
             "features": {
                 "title": raw_job["title"],
                 "description": raw_job["description"],
-                "pay": salary if salary != "Not Specified" else raw_job["pay_range"],
+                "pay": salary,
                 "seniority": seniority,
                 "work_type": work_type,
-                "timezone": raw_job["timezone"]
+                "timezone": timezone
             },
             "embeddings": {
                 "description_vector": None, 
@@ -586,7 +539,7 @@ async def main():
 
         processed_job_pool.append(extracted_data)
 
-    print(f"Successfully processed {len(processed_job_pool)} jobs after filtering.")
+    print(f"Successfully extracted data for {len(processed_job_pool)} jobs.")
     print(f"Sample Job: {processed_job_pool[0]['features'] if processed_job_pool else 'No jobs found'}")
 
     print(f"Starting AI/LLM Pass on {len(processed_job_pool)} jobs...")
@@ -594,29 +547,54 @@ async def main():
     for index, job in enumerate(processed_job_pool):
         print(f"Processing job {index + 1}/{len(processed_job_pool)}...")
         
-        description = job['features']['description']
+        if not job or 'features' not in job:
+            error_logger_continue(f"Warning: job at index {index} has invalid structure")
+            continue
+            
+        description = job['features'].get('description', '')
+        if not description:
+            error_logger_continue(f"Warning: job at index {index} has no description")
+            continue
 
-        # 1. AI Extraction (The "Smart" Pass)
-        # We use a high-intelligence model (Claude) to parse the messy text into clean JSON
         ai_data = call_llm_for_extraction(ai, description, provider_name="claude")
         
-        # Map extracted data to the job object
-        job['features']['skills'] = ai_data.get('skills', [])
-        job['features']['requirements'] = ai_data.get('requirements', [])
-        job['features']['summary'] = ai_data.get('summary', "")
+        skills = []
+        requirements = []
+        summary = ""
+
+        if isinstance(ai_data, dict):
+            skills = ai_data.get('skills', [])
+            requirements = ai_data.get('requirements', [])
+            summary = ai_data.get('summary', "")
+        elif isinstance(ai_data, str):
+            # try to parse JSON string
+            try:
+                parsed = json.loads(ai_data)
+                if isinstance(parsed, dict):
+                    skills = parsed.get('skills', [])
+                    requirements = parsed.get('requirements', [])
+                    summary = parsed.get('summary', "")
+            except Exception:
+                # leave defaults
+                pass
+
+        features = job['features']
+        features['skills'] = skills or []
+        features['requirements'] = requirements or []
+        features['summary'] = summary or ""
 
         # 2. Embedding Generation (The "Vector" Pass)
         # We use a specialized/cheaper model (ChatGPT/OpenAI) for high-dimensional vectors
         
         # Vector A: The "Skills" Vector (Matches against candidate technical skills)
-        skills_text = ", ".join(job['features']['skills'])
+        skills_text = ", ".join(features['skills'])
         if skills_text:
             job['embeddings']['skills_vector'] = generate_embeddings(ai, skills_text, provider_name="chatgpt")
         else:
             job['embeddings']['skills_vector'] = []
 
         # Vector B: The "Context" Vector (Matches against candidate professional summary/experience)
-        summary_text = job['features']['summary']
+        summary_text = features['summary']
         if summary_text:
             job['embeddings']['description_vector'] = generate_embeddings(ai, summary_text, provider_name="chatgpt")
         else:
@@ -785,55 +763,407 @@ async def main():
         if match_score:
             print(f"Job '{job['features']['title']}' has archetype matches: {[m['name'] + ':' + str(m['score']) for m in match_score]}")
 
-    print("Applying enhanced scoring based on archetype matches...")
+    # Import adjustment functions from vector_engine
+    from app.vector_engine import apply_keyword_adjustments, apply_metadata_adjustments
+    
+    print("Applying weighted semantic scoring (Stage 5D)...")
     for job in active_job_pool:
-        archetype_scores = [match['similarity_score'] for match in job.get('archetype_matches', [])]
-        if archetype_scores:
-            max_archetype_score = max(archetype_scores)
-            boost_factor = max_archetype_score ** 2
-            job['archetype_enhanced_score'] = boost_factor
+        matches = job.get('archetype_matches', [])
+        if not matches:
+            continue
+            
+        # Use the best matching archetype for scoring
+        best_match = matches[0]  # Already sorted by highest score
+        
+        # Extract individual similarity scores from Stage 5C comparison
+        title_similarity = best_match.get('title_similarity', 0.0)
+        skills_similarity = best_match.get('skills_similarity', 0.0)
+        responsibility_similarity = best_match.get('responsibility_similarity', 0.0)
+        
+        # Step 1.1: Compute weighted semantic score (Stage 5D)
+        semantic_score = (
+            0.40 * title_similarity +
+            0.35 * skills_similarity +
+            0.25 * responsibility_similarity
+        )
+        
+        # Step 2.1: Apply keyword adjustments (Stage 5E)
+        job_skills = job.get('features', {}).get('skills', [])
+        job_title = job.get('features', {}).get('title', '')
+        semantic_score = apply_keyword_adjustments(semantic_score, job_skills, job_title)
+        
+        # Step 2.2: Apply metadata adjustments (Stage 5F)
+        # Build job metadata for adjustments
+        job_meta = {
+            "is_remote": job.get('features', {}).get('work_type', '').lower() == 'remote',
+            "salary": 0,  # Will be parsed from pay_range if available
+            "days_old": 30  # Default, would be calculated from job posting date
+        }
+        
+        # Parse salary from pay_range if available
+        pay_range = job.get('features', {}).get('pay', '')
+        if pay_range:
+            import re as _re
+            numbers = _re.findall(r'\d+(?:,\d+)?', pay_range.replace(',', ''))
+            if len(numbers) >= 2:
+                job_meta["salary"] = int(numbers[1])  # Use max of range
+            elif len(numbers) == 1:
+                job_meta["salary"] = int(numbers[0])
+        
+        semantic_score = apply_metadata_adjustments(semantic_score, job_meta)
+        
+        # Step 1.2: Clamp and normalize (Stage 5G)
+        semantic_score = max(0.0, min(1.0, semantic_score))
+        score_percent = int(round(semantic_score * 100))
+        
+        # Store all scoring data in job object
+        job['semantic_score'] = semantic_score
+        job['semantic_score_percent'] = score_percent
+        job['title_similarity'] = title_similarity
+        job['skills_similarity'] = skills_similarity
+        job['responsibility_similarity'] = responsibility_similarity
+        job['adjusted_score'] = semantic_score  # After adjustments, before clamping was same
+        job['best_archetype'] = best_match.get('archetype_name', '')
 
     print("Generating detailed ranking metadata...")
     for job in active_job_pool:
         if 'retrieval_metadata' not in job:
             job['retrieval_metadata'] = {}
-        if 'archetype_enhanced_score' in job:
-            job['retrieval_metadata']['enhanced_archetype_score'] = job['archetype_enhanced_score']
-            job['retrieval_metadata']['normalized_archetype_score'] = float(job['archetype_enhanced_score'])
+        if 'semantic_score' in job:
+            job['retrieval_metadata']['semantic_score'] = job['semantic_score']
+            job['retrieval_metadata']['semantic_score_percent'] = job['semantic_score_percent']
+            job['retrieval_metadata']['best_archetype'] = job.get('best_archetype', '')
 
-    print("Applying threshold filtering based on archetype matches...")
+    # Phase 3: Filtering & Persistence (Stage 5I)
+    print("Applying semantic score threshold filtering (Stage 5I)...")
+    MIN_SCORE_THRESHOLD = 0.72
+    TARGET_COUNT = 20  # Optional fallback target
+    
     filtered_job_pool = []
     for job in active_job_pool:
-        match_scores = [m['similarity_score'] for m in job.get('archetype_matches', [])]
-        if match_scores and max(match_scores) > 0.3:
+        if job.get('semantic_score', 0) >= MIN_SCORE_THRESHOLD:
             filtered_job_pool.append(job)
-    print(f"Filtered job pool from {len(active_job_pool)} to {len(filtered_job_pool)} jobs based on archetype match strength.")
+    
+    # Optional: Add top-X% fallback if not enough jobs meet threshold
+    if len(filtered_job_pool) < TARGET_COUNT:
+        sorted_jobs = sorted(active_job_pool, key=lambda x: x.get('semantic_score', 0), reverse=True)
+        top_n = max(TARGET_COUNT - len(filtered_job_pool), 1)
+        # Add jobs that aren't already in filtered_pool
+        for job in sorted_jobs[:top_n]:
+            if job not in filtered_job_pool:
+                filtered_job_pool.append(job)
+    
+    print(f"Filtered job pool from {len(active_job_pool)} to {len(filtered_job_pool)} jobs based on semantic score threshold (>= {MIN_SCORE_THRESHOLD}).")
 
-    print("\n=== Archetype-Based Job Shortlisting ===")
-    top_jobs = filtered_job_pool[:5]
+    # Phase 3: Persist results to database (Stage 5J)
+    print("Persisting vector scores to database...")
+    try:
+        # Use PostgreSQL (matching the existing database setup)
+        from app.postgres_mgr import PostgresManager
+        
+        # Get DB connection params from env
+        db_host = os.getenv("DB_HOST", "localhost")
+        db_port = os.getenv("DB_PORT", "5432")
+        db_user = os.getenv("DB_USER", "postgres")
+        db_password = os.getenv("DB_PASSWORD", "")
+        db_name = os.getenv("DB_NAME", "web_scraper_db")
+        
+        # Connect to database
+        pg_mgr = PostgresManager(db_host, int(db_port), db_user, db_password)
+        pg_mgr.connect(db_name)
+        
+        # Create vector_scores table if it doesn't exist
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS vector_scores (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            archetype_name VARCHAR(255) NOT NULL,
+            semantic_score REAL,
+            title_similarity REAL,
+            skills_similarity REAL,
+            responsibility_similarity REAL,
+            adjusted_score REAL,
+            rank INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        pg_mgr.execute_sql(create_table_sql, dbname=db_name)
+        
+        # Create index if it doesn't exist (separate statement)
+        create_index_sql = """
+        CREATE INDEX IF NOT EXISTS idx_vs_job_id ON vector_scores(job_id)
+        """
+        pg_mgr.execute_sql(create_index_sql, dbname=db_name)
+        
+        # Insert ranked results
+        for rank, job in enumerate(filtered_job_pool, start=1):
+            insert_sql = """
+                INSERT INTO vector_scores (job_id, archetype_name, semantic_score, 
+                                           title_similarity, skills_similarity, 
+                                           responsibility_similarity, adjusted_score, rank)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            pg_mgr.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                job.get('best_archetype', ''),
+                job.get('semantic_score', 0),
+                job.get('title_similarity', 0),
+                job.get('skills_similarity', 0),
+                job.get('responsibility_similarity', 0),
+                job.get('adjusted_score', 0),
+                rank
+            ), dbname=db_name)
+        
+        pg_mgr.close()
+        print(f"Successfully persisted {len(filtered_job_pool)} vector scores to database.")
+        
+    except Exception as e:
+        print(f"Error persisting vector scores: {e}")
+        logging.error(f"Vector score persistence failed: {e}")
+
+    print("\n=== Semantic Score-Based Job Shortlisting ===")
+    # Sort by semantic score for display
+    sorted_filtered = sorted(filtered_job_pool, key=lambda x: x.get('semantic_score', 0), reverse=True)
+    top_jobs = sorted_filtered[:5]
     for i, job in enumerate(top_jobs):
         print(f"{i+1}. {job['features']['title']}")
-        if job.get('retrieval_metadata'):
-            print(f"   Best archetype match: {job['retrieval_metadata'].get('best_match', 'None')}")
-            print(f"   Match count: {job['retrieval_metadata'].get('match_count', 0)}")
-            print(f"   Enhanced archetype score: {job.get('archetype_enhanced_score', 'N/A')}")
+        print(f"   Semantic Score: {job.get('semantic_score_percent', 'N/A')}%")
+        print(f"   Best archetype match: {job.get('best_archetype', 'None')}")
+        print(f"   Title similarity: {job.get('title_similarity', 0):.3f}")
+        print(f"   Skills similarity: {job.get('skills_similarity', 0):.3f}")
+        print(f"   Responsibility similarity: {job.get('responsibility_similarity', 0):.3f}")
         print()
 
-    print("Applying cheap LLM pass based on archetype matching...")
-    prioritized_jobs = []
-    for job in filtered_job_pool:
-        archetype_score = job.get('archetype_enhanced_score', 0)
-        if archetype_score > 0.5:
-            prioritized_jobs.append(job)
-    print(f"Prioritized {len(prioritized_jobs)} jobs for cheap LLM analysis based on archetype matching.")
+    # =====================================================
+    # STAGE 6: CHEAP LLM CLASSIFICATION
+    # =====================================================
+    print("\n" + "="*60)
+    print("STAGE 6: CHEAP LLM CLASSIFICATION")
+    print("="*60)
+    
+    # Initialize cheap LLM classifier
+    # Use environment variable to select provider: "gemini", "openai", or "lm_studio"
+    cheap_llm_provider = os.getenv("CHEAP_LLM_PROVIDER", "gemini")
+    cheap_classifier = CheapLLMClassifier(provider=cheap_llm_provider)
+    
+    # Run Stage 6 on filtered job pool
+    shortlisted_jobs = await process_stage_6(
+        jobs=filtered_job_pool,
+        classifier=cheap_classifier,
+        candidate_profile=user_profile,
+        candidate_skills=skills,
+        batch_size=5
+    )
+    
+    # Persist Stage 6 results to database
+    print("Persisting Stage 6 results to database...")
+    try:
+        from app.postgres_mgr import PostgresManager
+        pg_mgr = PostgresManager(db_host, int(db_port), db_user, db_password)
+        pg_mgr.connect(db_name)
+        
+        # Create cheap_llm_results table
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS cheap_llm_results (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            fit_score INTEGER,
+            decision VARCHAR(20),
+            strengths JSONB,
+            concerns JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        pg_mgr.execute_sql(create_table_sql, dbname=db_name)
+        
+        # Insert results
+        for job in shortlisted_jobs:
+            cheap_result = job.get('cheap_llm_result', {})
+            insert_sql = """
+                INSERT INTO cheap_llm_results (job_id, fit_score, decision, strengths, concerns)
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            pg_mgr.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                cheap_result.get('fit_score', 50),
+                cheap_result.get('decision', 'maybe'),
+                json.dumps(cheap_result.get('strengths', [])),
+                json.dumps(cheap_result.get('concerns', []))
+            ), dbname=db_name)
+        
+        pg_mgr.close()
+        print(f"Persisted {len(shortlisted_jobs)} cheap LLM results to database.")
+    except Exception as e:
+        print(f"Error persisting Stage 6 results: {e}")
+        logging.error(f"Stage 6 persistence failed: {e}")
+    
+    # =====================================================
+    # STAGE 7: STRONG LLM RERANKING
+    # =====================================================
+    print("\n" + "="*60)
+    print("STAGE 7: STRONG LLM RERANKING")
+    print("="*60)
+    
+    # Initialize strong LLM reranker
+    # Use environment variable to select provider: "claude", "openai", or "gemini"
+    strong_llm_provider = os.getenv("STRONG_LLM_PROVIDER", "claude")
+    strong_reranker = StrongLLMReranker(provider=strong_llm_provider)
+    
+    # Configure how many jobs to deeply analyze (top N from Stage 6)
+    top_n_for_deep_analysis = int(os.getenv("TOP_N_DEEP_ANALYSIS", "15"))
+    
+    # Run Stage 7 on top candidates from Stage 6
+    deeply_analyzed_jobs = await process_stage_7(
+        jobs=shortlisted_jobs,
+        reranker=strong_reranker,
+        candidate_profile=user_profile,
+        candidate_skills=skills,
+        top_n=top_n_for_deep_analysis
+    )
+    
+    # Persist Stage 7 results to database
+    print("Persisting Stage 7 results to database...")
+    try:
+        pg_mgr = PostgresManager(db_host, int(db_port), db_user, db_password)
+        pg_mgr.connect(db_name)
+        
+        # Create strong_llm_results table
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS strong_llm_results (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            final_score INTEGER,
+            priority VARCHAR(20),
+            apply_recommendation VARCHAR(20),
+            red_flags JSONB,
+            tailoring_notes JSONB,
+            recruiter_bait_likelihood VARCHAR(20),
+            detailed_fit_analysis TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        pg_mgr.execute_sql(create_table_sql, dbname=db_name)
+        
+        # Insert results
+        for job in deeply_analyzed_jobs:
+            strong_result = job.get('strong_llm_result', {})
+            insert_sql = """
+                INSERT INTO strong_llm_results (job_id, final_score, priority, 
+                                               apply_recommendation, red_flags, 
+                                               tailoring_notes, recruiter_bait_likelihood,
+                                               detailed_fit_analysis)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            pg_mgr.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                strong_result.get('final_score', 50),
+                strong_result.get('priority', 'medium'),
+                strong_result.get('apply_recommendation', 'maybe'),
+                json.dumps(strong_result.get('red_flags', [])),
+                json.dumps(strong_result.get('tailoring_notes', [])),
+                strong_result.get('recruiter_bait_likelihood', 'medium'),
+                strong_result.get('detailed_fit_analysis', '')
+            ), dbname=db_name)
+        
+        pg_mgr.close()
+        print(f"Persisted {len(deeply_analyzed_jobs)} strong LLM results to database.")
+    except Exception as e:
+        print(f"Error persisting Stage 7 results: {e}")
+        logging.error(f"Stage 7 persistence failed: {e}")
+    
+    # =====================================================
+    # STAGE 8: FINAL APPLICATION QUEUE
+    # =====================================================
+    print("\n" + "="*60)
+    print("STAGE 8: FINAL APPLICATION QUEUE")
+    print("="*60)
+    
+    # Run Stage 8 to generate final ranked queue
+    final_queue = await process_stage_8(jobs=deeply_analyzed_jobs)
+    
+    # Persist final queue to database
+    print("Persisting final application queue to database...")
+    try:
+        pg_mgr = PostgresManager(db_host, int(db_port), db_user, db_password)
+        pg_mgr.connect(db_name)
+        
+        # Create final_application_queue table
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS final_application_queue (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL UNIQUE,
+            final_score REAL,
+            priority VARCHAR(20),
+            apply_recommendation VARCHAR(20),
+            queue_position INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        pg_mgr.execute_sql(create_table_sql, dbname=db_name)
+        
+        # Insert final queue with positions
+        for position, job in enumerate(final_queue, start=1):
+            insert_sql = """
+                INSERT INTO final_application_queue (job_id, final_score, priority, 
+                                                     apply_recommendation, queue_position)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (job_id) DO UPDATE SET
+                    final_score = EXCLUDED.final_score,
+                    priority = EXCLUDED.priority,
+                    apply_recommendation = EXCLUDED.apply_recommendation,
+                    queue_position = EXCLUDED.queue_position,
+                    created_at = CURRENT_TIMESTAMP
+            """
+            pg_mgr.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                job.get('final_score', 0),
+                job.get('priority', 'medium'),
+                job.get('apply_recommendation', 'maybe'),
+                position
+            ), dbname=db_name)
+        
+        pg_mgr.close()
+        print(f"Persisted final queue with {len(final_queue)} jobs to database.")
+    except Exception as e:
+        print(f"Error persisting final queue: {e}")
+        logging.error(f"Final queue persistence failed: {e}")
+    
+    # Print detailed final queue
+    print("\n" + "="*60)
+    print("DETAILED FINAL APPLICATION QUEUE")
+    print("="*60)
+    
+    for i, job in enumerate(final_queue[:10], 1):  # Show top 10
+        features = job.get('features', {})
+        cheap_result = job.get('cheap_llm_result', {})
+        strong_result = job.get('strong_llm_result', {})
+        
+        print(f"\n{i}. {features.get('title', 'Unknown')}")
+        print(f"   Priority: {job.get('priority', 'unknown').upper()}")
+        print(f"   Final Score: {job.get('final_score', 0):.1f}/100")
+        print(f"   Recommendation: {job.get('apply_recommendation', 'maybe').upper()}")
+        print(f"   Semantic Score: {job.get('semantic_score', 0)*100:.1f}%")
+        print(f"   Cheap LLM Fit: {cheap_result.get('fit_score', 0)}/100")
+        print(f"   Strong LLM Score: {strong_result.get('final_score', 0)}/100")
+        print(f"   Salary: {features.get('pay', 'Not specified')}")
+        print(f"   Work Type: {features.get('work_type', 'Unknown')}")
+        
+        if cheap_result.get('strengths'):
+            print(f"   Strengths: {', '.join(cheap_result.get('strengths', [])[:3])}")
+        if strong_result.get('tailoring_notes'):
+            print(f"   Tailoring: {strong_result.get('tailoring_notes', ['None'])[0]}")
+    
+    print("\n" + "="*60)
+    print("PIPELINE COMPLETE")
+    print("="*60)
+    print(f"Total jobs processed: {len(processed_job_pool)}")
+    print(f"Jobs after semantic filtering: {len(filtered_job_pool)}")
+    print(f"Jobs after cheap LLM classification: {len(shortlisted_jobs)}")
+    print(f"Jobs after strong LLM reranking: {len(deeply_analyzed_jobs)}")
+    print(f"Final application queue: {len(final_queue)} jobs")
 
-    print("Applying premium LLM pass to top archetype-matched jobs...")
-    top_archetype_jobs = sorted(filtered_job_pool, key=lambda x: x.get('archetype_enhanced_score', 0), reverse=True)[:10]
-    print(f"Processing top {len(top_archetype_jobs)} jobs with premium LLM models...")
-    for i, job in enumerate(top_archetype_jobs):
-        print(f"Premium LLM Analysis - Job {i+1}: {job['features']['title']}")
-        # In a real implementation, you would:
-        # - Use higher-quality LLMs (e.g., GPT-4, Claude)
-        # - Perform more detailed skill matching with context
 
-# Init
+# Entry point
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())

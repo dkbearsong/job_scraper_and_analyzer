@@ -2,6 +2,62 @@ import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 
+# =============================================
+# KEYWORD ADJUSTMENTS CONFIGURATION (Stage 5E)
+# =============================================
+KEYWORD_ADJUSTMENTS = {
+    "preferred": {"python": 0.03, "rust": 0.02, "kubernetes": 0.025},
+    "penalty": {"wordpress": -0.08, "wix": -0.05, "legacy": -0.03}
+}
+
+# =============================================
+# METADATA ADJUSTMENTS CONFIGURATION (Stage 5F)
+# =============================================
+METADATA_ADJUSTMENTS = {
+    "remote_bonus": 0.02,
+    "salary_threshold": 90000,  # USD
+    "salary_bonus": 0.03,
+    "recency_days": 30,
+    "recency_bonus": 0.02
+}
+
+
+def apply_keyword_adjustments(base_score: float, skills_list: List[str], title: str) -> float:
+    """
+    Apply keyword-based bonuses and penalties to a semantic score.
+    Case-insensitive matching against skills list and job title.
+    """
+    score = base_score
+    skills_lower = [s.lower() for s in skills_list]
+    title_lower = title.lower()
+    
+    # Apply preferred bonuses
+    for kw, delta in KEYWORD_ADJUSTMENTS["preferred"].items():
+        if kw in skills_lower or kw in title_lower:
+            score += delta
+            
+    # Apply penalty deductions
+    for kw, delta in KEYWORD_ADJUSTMENTS["penalty"].items():
+        if kw in skills_lower or kw in title_lower:
+            score += delta
+            
+    return score
+
+
+def apply_metadata_adjustments(base_score: float, job_meta: Dict[str, Any]) -> float:
+    """
+    Apply metadata-based bonuses to a semantic score.
+    Checks for remote work, salary threshold, and job recency.
+    """
+    score = base_score
+    if job_meta.get("is_remote", False):
+        score += METADATA_ADJUSTMENTS["remote_bonus"]
+    if job_meta.get("salary", 0) >= METADATA_ADJUSTMENTS["salary_threshold"]:
+        score += METADATA_ADJUSTMENTS["salary_bonus"]
+    if job_meta.get("days_old", 999) <= METADATA_ADJUSTMENTS["recency_days"]:
+        score += METADATA_ADJUSTMENTS["recency_bonus"]
+    return score
+
 # --- Abstract Base Class to enforce structure ---
 
 class EmbeddingProvider(ABC):

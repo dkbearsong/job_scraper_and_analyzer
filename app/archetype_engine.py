@@ -90,33 +90,66 @@ class ArchetypeManager:
     def compare_job_to_archetypes(self, job_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Compares a single job against all loaded archetypes.
-        Returns a list of matches with scores and metadata.
+        Returns a list of matches with detailed similarity scores (title, skills, responsibilities)
+        and metadata. This enables the weighted scoring formula in Stage 5D.
         """
         if not self.archetypes:
             return []
 
-        # 1. Create the semantic document for the job
-        job_doc = self.create_semantic_document(job_data)
+        # 1. Extract job components for individual similarity calculations
+        job_title = job_data.get("features", {}).get("title", "")
+        job_skills = job_data.get("features", {}).get("skills", [])
+        job_requirements = job_data.get("features", {}).get("requirements", [])
+        job_description = job_data.get("features", {}).get("description", "")
         
-        # 2. Generate the job embedding
-        job_embedding = self.vector_engine.get_embeddings([job_doc])[0]
+        # Use requirements if available, otherwise fall back to description
+        job_responsibilities_text = "\n".join(job_requirements) if job_requirements else job_description
         
+        # 2. Generate embeddings for each job component
+        job_title_embedding = None
+        job_skills_embedding = None
+        job_responsibilities_embedding = None
+        
+        if job_title:
+            job_title_embedding = self.vector_engine.get_embeddings([job_title])[0]
+        
+        if job_skills:
+            skills_text = ", ".join(job_skills)
+            job_skills_embedding = self.vector_engine.get_embeddings([skills_text])[0]
+        
+        if job_responsibilities_text:
+            job_responsibilities_embedding = self.vector_engine.get_embeddings([job_responsibilities_text])[0]
+
         matches = []
         for archetype in self.archetypes:
-            archetype_embedding = archetype.get_combined_embedding()
-            if archetype_embedding is None:
-                continue
-
-            score = self.vector_engine.compute_similarity(job_embedding, archetype_embedding)
+            # Calculate individual similarity scores for each component
+            title_similarity = 0.0
+            skills_similarity = 0.0
+            responsibilities_similarity = 0.0
+            
+            if job_title_embedding is not None and archetype.title_embedding is not None:
+                title_similarity = self.vector_engine.compute_similarity(job_title_embedding, archetype.title_embedding)
+            
+            if job_skills_embedding is not None and archetype.skills_embedding is not None:
+                skills_similarity = self.vector_engine.compute_similarity(job_skills_embedding, archetype.skills_embedding)
+            
+            if job_responsibilities_embedding is not None and archetype.responsibilities_embedding is not None:
+                responsibilities_similarity = self.vector_engine.compute_similarity(job_responsibilities_embedding, archetype.responsibilities_embedding)
+            
+            # Calculate combined similarity for sorting (simple average as fallback)
+            combined_score = (title_similarity + skills_similarity + responsibilities_similarity) / 3.0
             
             matches.append({
                 "archetype_name": archetype.name,
                 "archetype_type": archetype.type,
-                "similarity_score": float(score),
+                "similarity_score": float(combined_score),  # For backward compatibility
+                "title_similarity": float(title_similarity),
+                "skills_similarity": float(skills_similarity),
+                "responsibility_similarity": float(responsibilities_similarity),
                 "metadata": archetype.metadata
             })
         
-        # Sort matches by highest score first
+        # Sort matches by highest combined score first
         return sorted(matches, key=lambda x: x['similarity_score'], reverse=True)
 
     def generate_retrieval_metadata(self, job_data: Dict[str, Any], matches: List[Dict[str, Any]]) -> Dict[str, Any]:
