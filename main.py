@@ -244,23 +244,19 @@ def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cac
     Returns:
         dict with keys 'skills' (list), 'requirements' (list), 'summary' (str).
     """
-    import json as _json
-    import os as _os
 
     empty_result = {"skills": [], "requirements": [], "summary": ""}
 
-    # Check if source file exists
-    if not _os.path.exists(source_path):
+    if not os.path.exists(source_path):
         print(f"Warning: profile source not found at {source_path}")
         return empty_result
 
-    source_mtime = _os.path.getmtime(source_path)
+    source_mtime = os.path.getmtime(source_path)
 
-    # Try loading from cache if it exists and is newer than source
-    if _os.path.exists(cache_path):
+    if os.path.exists(cache_path):
         try:
             with open(cache_path, 'r') as f:
-                cache = _json.load(f)
+                cache = json.load(f)
             cache_time = cache.get('timestamp', 0)
             if cache_time >= source_mtime:
                 print(f"Using cached profile from {cache_path}")
@@ -272,7 +268,6 @@ def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cac
         print(f"Warning: empty text in {source_path}")
         return empty_result
 
-    # Run LLM extraction
     print(f"Extracting profile data from {source_path}...")
     ai_data = call_llm_for_extraction(ai, raw_text, provider_name=os.getenv("EXTRACTION_LLM"))
     
@@ -285,7 +280,7 @@ def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cac
         }
     elif isinstance(ai_data, str):
         try:
-            parsed = _json.loads(ai_data)
+            parsed = json.loads(ai_data)
             if isinstance(parsed, dict):
                 result = {
                     "skills": parsed.get('skills', []),
@@ -295,13 +290,12 @@ def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cac
         except Exception:
             pass
 
-    # Write to cache
     try:
-        cache_dir = _os.path.dirname(cache_path)
-        if cache_dir and not _os.path.exists(cache_dir):
-            _os.makedirs(cache_dir, exist_ok=True)
+        cache_dir = os.path.dirname(cache_path)
+        if cache_dir and not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
         with open(cache_path, 'w') as f:
-            _json.dump({"timestamp": source_mtime, "data": result}, f, indent=2)
+            json.dump({"timestamp": source_mtime, "data": result}, f, indent=2)
         print(f"Cached profile data to {cache_path}")
     except Exception as e:
         print(f"Warning: failed to write profile cache {cache_path}: {e}")
@@ -707,11 +701,9 @@ async def main():
     ]
 
     for arch_config in all_archetypes:
-        # Check if already cached in DB
         cached_arch = dp.get_archetype_embeddings(arch_config['name'])
         
         if cached_arch:
-            # Load pre-computed vectors from DB to satisfy "rarely change" constraint
             archetype_manager.add_archetype(Archetype(
                 name=arch_config['name'],
                 type=cached_arch['archetype_type'],
@@ -721,7 +713,6 @@ async def main():
                 metadata=cached_arch.get('metadata', {})
             ))
         else:
-            # Generate new vectors if not in cache
             print(f"Generating new embeddings for archetype: {arch_config['name']}")
             new_arch = archetype_manager.load_archetype(
                 name=arch_config['name'],
@@ -740,11 +731,10 @@ async def main():
     
     print(f"Loaded {len(archetype_manager.archetypes)} archetypes for comparison.")
 
-    # === Vector Scoring with Archetypes (Complete Implementation) ===
+    # === Vector Scoring with Archetypes ===
 
     print("Comparing jobs to archetypes...")
     
-    # Process each job through archetype comparison
     for index, job in enumerate(active_job_pool):
         print(f"Processing archetype comparison for job {index + 1}/{len(active_job_pool)}...")
         
@@ -768,7 +758,7 @@ async def main():
     # Import adjustment functions from vector_engine
     from app.vector_engine import apply_keyword_adjustments, apply_metadata_adjustments
     
-    print("Applying weighted semantic scoring (Stage 5D)...")
+    print("Applying weighted semantic scoring...")
     for job in active_job_pool:
         matches = job.get('archetype_matches', [])
         if not matches:

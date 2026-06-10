@@ -3,15 +3,15 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 
 # =============================================
-# KEYWORD ADJUSTMENTS CONFIGURATION (Stage 5E)
+# KEYWORD ADJUSTMENTS CONFIGURATION
 # =============================================
 KEYWORD_ADJUSTMENTS = {
     "preferred": {"python": 0.03, "rust": 0.02, "kubernetes": 0.025},
     "penalty": {"wordpress": -0.08, "wix": -0.05, "legacy": -0.03}
-}
+} # Need to rebuild this around env vars
 
 # =============================================
-# METADATA ADJUSTMENTS CONFIGURATION (Stage 5F)
+# METADATA ADJUSTMENTS CONFIGURATION
 # =============================================
 METADATA_ADJUSTMENTS = {
     "remote_bonus": 0.02,
@@ -19,7 +19,7 @@ METADATA_ADJUSTMENTS = {
     "salary_bonus": 0.03,
     "recency_days": 30,
     "recency_bonus": 0.02
-}
+} # Need to rebuild this around env vars
 
 
 def apply_keyword_adjustments(base_score: float, skills_list: List[str], title: str) -> float:
