@@ -1341,5 +1341,12 @@ async def main():
 
 # Entry point
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    import sys
+
+    # Check for TUI mode
+    if "--tui" in sys.argv or "-t" in sys.argv:
+        from app.tui import run_tui
+        run_tui()
+    else:
+        import asyncio
+        asyncio.run(main())

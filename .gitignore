@@ -1,0 +1,11 @@
+# Files
+.env
+codereview.md
+main.py.backup
+
+# Folders
+.venv/
+documents/
+output/
+site_strategies/
+tests/
