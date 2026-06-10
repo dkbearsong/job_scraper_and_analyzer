@@ -17,10 +17,8 @@
 - 375-382: This should be condensable so that each of the keys are a checked and changed in a single line
 - 394-401: Convert this into .env vars so users can customize them. Keep the current values as fallbacks
 - 409-419: This appears as though it could be rewritten to be simpler and shorter, maybe easier to read. Reusable functions perhaps?
-- Need to review pylance errors in this file
+- Need to review pylance errors in this file. Several errors found regarding clients and properties within.
 
 
-
+# Overall (no specific file)
 - Should make sure there are also options for Ollama
-
-- Currently on llm_classifier.py on line 584. main.py on line 942

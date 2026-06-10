@@ -1,3 +1,5 @@
+import os
+import json
 import numpy as np
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
@@ -5,21 +7,28 @@ from typing import List, Dict, Any
 # =============================================
 # KEYWORD ADJUSTMENTS CONFIGURATION
 # =============================================
-KEYWORD_ADJUSTMENTS = {
-    "preferred": {"python": 0.03, "rust": 0.02, "kubernetes": 0.025},
-    "penalty": {"wordpress": -0.08, "wix": -0.05, "legacy": -0.03}
-} # Need to rebuild this around env vars
+def _load_env_json(key: str, default: str) -> dict:
+    """Load a JSON dict from an env var, falling back to the provided default."""
+    raw = os.getenv(key, "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return json.loads(default)
+
+KEYWORD_ADJUSTMENTS = _load_env_json(
+    "KEYWORD_ADJUSTMENTS",
+    '{"preferred": {"python": 0.03, "rust": 0.02, "kubernetes": 0.025}, "penalty": {"wordpress": -0.08, "wix": -0.05, "legacy": -0.03}}'
+)
 
 # =============================================
 # METADATA ADJUSTMENTS CONFIGURATION
 # =============================================
-METADATA_ADJUSTMENTS = {
-    "remote_bonus": 0.02,
-    "salary_threshold": 90000,  # USD
-    "salary_bonus": 0.03,
-    "recency_days": 30,
-    "recency_bonus": 0.02
-} # Need to rebuild this around env vars
+METADATA_ADJUSTMENTS = _load_env_json(
+    "METADATA_ADJUSTMENTS",
+    '{"remote_bonus": 0.02, "salary_threshold": 90000, "salary_bonus": 0.03, "recency_days": 30, "recency_bonus": 0.02}'
+)
 
 
 def apply_keyword_adjustments(base_score: float, skills_list: List[str], title: str) -> float:

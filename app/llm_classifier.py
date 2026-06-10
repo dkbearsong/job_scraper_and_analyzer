@@ -11,7 +11,7 @@ import asyncio
 import json
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from openai import OpenAI
 from anthropic import Anthropic
 import google.genai as genai
@@ -105,6 +105,34 @@ Concerns: {concerns}
 Perform deep analysis and return JSON."""
 
 
+# =====================================================
+# SHARED VALIDATION HELPERS
+# =====================================================
+
+def _validate_dict(result: Dict, required: Dict[str, tuple]) -> Dict:
+    """
+    Validate that result contains all required keys with the correct types.
+    Falls back to defaults for missing or wrong-type values.
+    Clamps int values named '*_score' to 0-100.
+    """
+    validated = {}
+    for key, (type_hint, default) in required.items():
+        value = result.get(key, default)
+        if not isinstance(value, type_hint):
+            value = default
+        validated[key] = value
+    # Clamp any score-like field to 0-100
+    for key in list(validated):
+        if key.endswith("_score") and isinstance(validated[key], (int, float)):
+            validated[key] = max(0, min(100, validated[key]))
+    return validated
+
+
+def _validate_enum(value: str, allowed: tuple[str, ...], default: str) -> str:
+    """Return value if it's in allowed, otherwise default."""
+    return value if value in allowed else default
+
+
 class CheapLLMClassifier:
     """
     Stage 6: Fast, structured fit analysis using lightweight models.
@@ -119,14 +147,17 @@ class CheapLLMClassifier:
         if self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             self.client = genai.Client(api_key=api_key)
-            self.model = "gemini-2.0-flash-lite"
+            self.model = os.getenv("CHEAP_LLM_MODEL", "gemini-2.0-flash-lite")
         elif self.provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             self.client = OpenAI(api_key=api_key)
-            self.model = "gpt-4o-mini"
+            self.model = os.getenv("CHEAP_LLM_MODEL", "gpt-4o-mini")
         elif self.provider == "lm_studio":
-            self.client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-            self.model = "local-model"
+            self.client = OpenAI(base_url=f"{os.getenv('LMS_URL', 'http://localhost')}:{os.getenv('LMS_PORT', '1234')}/v1", api_key=os.getenv("LMS_API_KEY", "lm-studio"))
+            self.model = os.getenv("CHEAP_LLM_MODEL", "local-model")
+        elif self.provider == "ollama":
+            self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
+            self.model = os.getenv("CHEAP_LLM_MODEL", "llama3")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -162,8 +193,8 @@ class CheapLLMClassifier:
                     )
                 )
                 content = response.text
-            elif self.provider in ("openai", "lm_studio"):
-                response = self.client.chat.completions.create(
+            elif self.provider in ("openai", "lm_studio", "ollama"):
+                response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
                         {"role": "system", "content": CHEAP_LLM_SYSTEM_PROMPT},
@@ -197,27 +228,13 @@ class CheapLLMClassifier:
     
     def _validate_result(self, result: Dict) -> Dict:
         """Ensure result has required fields with valid types."""
-        required = {
+        validated = _validate_dict(result, {
             "fit_score": (int, 50),
             "decision": (str, "maybe"),
             "strengths": (list, []),
-            "concerns": (list, [])
-        }
-        
-        validated = {}
-        for key, (type_hint, default) in required.items():
-            value = result.get(key, default)
-            if not isinstance(value, type_hint):
-                value = default
-            validated[key] = value
-        
-        # Clamp fit_score to 0-100
-        validated["fit_score"] = max(0, min(100, validated["fit_score"]))
-        
-        # Validate decision values
-        if validated["decision"] not in ("apply", "maybe", "skip"):
-            validated["decision"] = "maybe"
-        
+            "concerns": (list, []),
+        })
+        validated["decision"] = _validate_enum(validated["decision"], ("apply", "maybe", "skip"), "maybe")
         return validated
 
 
@@ -235,18 +252,21 @@ class StrongLLMReranker:
         if self.provider == "claude":
             api_key = os.getenv("ANTHROPIC_API_KEY")
             self.client = Anthropic(api_key=api_key)
-            self.model = "claude-3-5-sonnet-20241022"
+            self.model = os.getenv("STRONG_LLM_MODEL", "claude-3-5-sonnet-20241022")
         elif self.provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             self.client = OpenAI(api_key=api_key)
-            self.model = "gpt-4o"
+            self.model = os.getenv("STRONG_LLM_MODEL", "gpt-4o")
         elif self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             self.client = genai.Client(api_key=api_key)
-            self.model = "gemini-2.0-flash-exp"
+            self.model = os.getenv("STRONG_LLM_MODEL", "gemini-2.0-flash-exp")
         elif self.provider == "lm_studio":
-            self.client = OpenAI(base_url="http://localhost:1234/v1", api_key="lm-studio")
-            self.model = "local-model"
+            self.client = OpenAI(base_url=f"{os.getenv('LMS_URL', 'http://localhost')}:{os.getenv('LMS_PORT', '1234')}/v1", api_key=os.getenv("LMS_API_KEY", "lm-studio"))
+            self.model = os.getenv("STRONG_LLM_MODEL", "local-model")
+        elif self.provider == "ollama":
+            self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
+            self.model = os.getenv("STRONG_LLM_MODEL", "llama3")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -290,7 +310,7 @@ class StrongLLMReranker:
         
         try:
             if self.provider == "claude":
-                response = self.client.messages.create(
+                response = self.client.messages.create( # type: ignore
                     model=self.model,
                     max_tokens=500,
                     system=STRONG_LLM_SYSTEM_PROMPT,
@@ -304,8 +324,8 @@ class StrongLLMReranker:
                         content = getattr(first_block, "output_text", None)
                     if content is None:
                         content = str(first_block)
-            elif self.provider in ("openai", "lm_studio"):
-                response = self.client.chat.completions.create(
+            elif self.provider in ("openai", "lm_studio", "ollama"):
+                response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
                         {"role": "system", "content": STRONG_LLM_SYSTEM_PROMPT},
@@ -316,7 +336,7 @@ class StrongLLMReranker:
                 )
                 content = response.choices[0].message.content
             elif self.provider == "gemini":
-                response = self.client.models.generate_content(
+                response = self.client.models.generate_content( 
                     model=self.model,
                     contents=f"{STRONG_LLM_SYSTEM_PROMPT}\n\n{prompt}",
                     config=types.GenerateContentConfig(
@@ -331,7 +351,7 @@ class StrongLLMReranker:
             if content is None:
                 return self._default_result()
             
-            result = json.loads(content)
+            result = json.loads(content) # type: ignore
             return self._validate_result(result)
             
         except Exception as e:
@@ -351,36 +371,18 @@ class StrongLLMReranker:
     
     def _validate_result(self, result: Dict) -> Dict:
         """Ensure result has required fields with valid types."""
-        required = {
+        validated = _validate_dict(result, {
             "final_score": (int, 50),
             "priority": (str, "medium"),
             "apply_recommendation": (str, "maybe"),
             "red_flags": (list, []),
             "tailoring_notes": (list, []),
             "recruiter_bait_likelihood": (str, "medium"),
-            "detailed_fit_analysis": (str, "")
-        }
-        
-        validated = {}
-        for key, (type_hint, default) in required.items():
-            value = result.get(key, default)
-            if not isinstance(value, type_hint):
-                value = default
-            validated[key] = value
-        
-        # Clamp final_score to 0-100
-        validated["final_score"] = max(0, min(100, validated["final_score"]))
-        
-        # Validate enum values
-        if validated["priority"] not in ("high", "medium", "low", "skip"):
-            validated["priority"] = "medium"
-        
-        if validated["apply_recommendation"] not in ("apply", "maybe", "skip"):
-            validated["apply_recommendation"] = "maybe"
-        
-        if validated["recruiter_bait_likelihood"] not in ("low", "medium", "high"):
-            validated["recruiter_bait_likelihood"] = "medium"
-        
+            "detailed_fit_analysis": (str, ""),
+        })
+        validated["priority"] = _validate_enum(validated["priority"], ("high", "medium", "low", "skip"), "medium")
+        validated["apply_recommendation"] = _validate_enum(validated["apply_recommendation"], ("apply", "maybe", "skip"), "maybe")
+        validated["recruiter_bait_likelihood"] = _validate_enum(validated["recruiter_bait_likelihood"], ("low", "medium", "high"), "medium")
         return validated
 
 
@@ -388,59 +390,62 @@ class FinalApplicationQueue:
     """
     Stage 8: Combine all scoring factors to produce final ranked application list.
     """
-    
+
+    _DEFAULT_WEIGHTS = {
+        "semantic_score": 0.25,
+        "cheap_llm_score": 0.20,
+        "strong_llm_score": 0.35,
+        "recency_bonus": 0.05,
+        "salary_bonus": 0.05,
+        "remote_bonus": 0.10,
+    }
+
+    @staticmethod
+    def _load_weights() -> dict:
+        """Load weights from env var SCORE_WEIGHTS JSON, falling back to defaults."""
+        raw = os.getenv("SCORE_WEIGHTS", "")
+        if raw:
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return dict(FinalApplicationQueue._DEFAULT_WEIGHTS)
+
     def __init__(self):
-        # Weights for final score calculation
-        self.weights = {
-            "semantic_score": 0.25,
-            "cheap_llm_score": 0.20,
-            "strong_llm_score": 0.35,
-            "recency_bonus": 0.05,
-            "salary_bonus": 0.05,
-            "remote_bonus": 0.10
-        }
-    
+        self.weights = self._load_weights()
+
     def calculate_final_score(self, job: Dict) -> float:
         """
         Calculate weighted final score combining all factors.
         """
-        score = 0.0
-        
-        # Semantic score (Stage 5)
-        semantic_score = job.get('semantic_score', 0) * 100  # Convert to 0-100
-        score += self.weights["semantic_score"] * semantic_score
-        
-        # Cheap LLM score (Stage 6)
-        cheap_score = job.get('cheap_llm_result', {}).get('fit_score', 50)
-        score += self.weights["cheap_llm_score"] * cheap_score
-        
-        # Strong LLM score (Stage 7)
-        strong_score = job.get('strong_llm_result', {}).get('final_score', 50)
-        score += self.weights["strong_llm_score"] * strong_score
-        
-        # Recency bonus
-        # Assume jobs within 7 days get full bonus, linear decay to 30 days
-        days_old = job.get('days_old', 30)
-        if days_old <= 7:
-            recency_factor = 1.0
-        elif days_old <= 30:
-            recency_factor = max(0, (30 - days_old) / 23)
-        else:
-            recency_factor = 0
-        score += self.weights["recency_bonus"] * recency_factor * 100
-        
-        # Salary bonus
-        pay_range = job.get('features', {}).get('pay', '')
-        salary_score = self._parse_salary_score(pay_range)
-        score += self.weights["salary_bonus"] * salary_score * 100
-        
-        # Remote preference bonus
+        w = self.weights
+
+        # Core scores (converted to 0-100 scale)
+        semantic = job.get('semantic_score', 0) * 100
+        cheap = job.get('cheap_llm_result', {}).get('fit_score', 50)
+        strong = job.get('strong_llm_result', {}).get('final_score', 50)
+
+        # Recency factor (linear decay 7→30 days)
+        days = job.get('days_old', 30)
+        recency = 1.0 if days <= 7 else (max(0, (30 - days) / 23) if days <= 30 else 0)
+
+        # Salary factor
+        salary = self._parse_salary_score(job.get('features', {}).get('pay', ''))
+
+        # Remote factor
         work_type = job.get('features', {}).get('work_type', '').lower()
-        is_remote = 'remote' in work_type
-        score += self.weights["remote_bonus"] * (100 if is_remote else 50)
-        
+        remote = 100 if 'remote' in work_type else 50
+
+        score = (
+            w.get("semantic_score", 0) * semantic
+            + w.get("cheap_llm_score", 0) * cheap
+            + w.get("strong_llm_score", 0) * strong
+            + w.get("recency_bonus", 0) * recency * 100
+            + w.get("salary_bonus", 0) * salary * 100
+            + w.get("remote_bonus", 0) * remote
+        )
         return max(0, min(100, score))
-    
+
     def _parse_salary_score(self, pay_range: str) -> float:
         """
         Parse salary range and return a normalized score (0-1).

@@ -281,6 +281,155 @@ class DataPuller:
             # Insert into database using the established PostgresManager instance
             self.conn.insert("job_embeddings", insert_data, dbname=self.dbname)
 
+    def bulk_create_table(self, create_sql: str, table_name: str = ""):
+        """Creates a table if it doesn't exist using the established connection."""
+        try:
+            self.conn.execute_sql(create_sql, dbname=self.dbname)
+        except Exception as e:
+            print(f"Warning: Could not create table {table_name}: {e}")
+
+    def save_vector_scores(self, filtered_job_pool: list):
+        """Persists vector scoring results to the vector_scores table."""
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS vector_scores (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            archetype_name VARCHAR(255) NOT NULL,
+            semantic_score REAL,
+            title_similarity REAL,
+            skills_similarity REAL,
+            responsibility_similarity REAL,
+            adjusted_score REAL,
+            rank INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        self.bulk_create_table(create_table_sql, "vector_scores")
+        create_index_sql = """
+        CREATE INDEX IF NOT EXISTS idx_vs_job_id ON vector_scores(job_id)
+        """
+        self.bulk_create_table(create_index_sql, "idx_vs_job_id")
+
+        for rank, job in enumerate(filtered_job_pool, start=1):
+            insert_sql = """
+                INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
+                                           title_similarity, skills_similarity,
+                                           responsibility_similarity, adjusted_score, rank)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            self.conn.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                job.get('best_archetype', ''),
+                job.get('semantic_score', 0),
+                job.get('title_similarity', 0),
+                job.get('skills_similarity', 0),
+                job.get('responsibility_similarity', 0),
+                job.get('adjusted_score', 0),
+                rank
+            ), dbname=self.dbname)
+
+    def save_cheap_llm_results(self, shortlisted_jobs: list):
+        """Persists Stage 6 cheap LLM results to the cheap_llm_results table."""
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS cheap_llm_results (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            fit_score INTEGER,
+            decision VARCHAR(20),
+            strengths JSONB,
+            concerns JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        self.bulk_create_table(create_table_sql, "cheap_llm_results")
+
+        for job in shortlisted_jobs:
+            cheap_result = job.get('cheap_llm_result', {})
+            insert_sql = """
+                INSERT INTO cheap_llm_results (job_id, fit_score, decision, strengths, concerns)
+                VALUES (%s, %s, %s, %s, %s)
+            """
+            self.conn.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                cheap_result.get('fit_score', 50),
+                cheap_result.get('decision', 'maybe'),
+                json.dumps(cheap_result.get('strengths', [])),
+                json.dumps(cheap_result.get('concerns', []))
+            ), dbname=self.dbname)
+
+    def save_strong_llm_results(self, deeply_analyzed_jobs: list):
+        """Persists Stage 7 strong LLM results to the strong_llm_results table."""
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS strong_llm_results (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL,
+            final_score INTEGER,
+            priority VARCHAR(20),
+            apply_recommendation VARCHAR(20),
+            red_flags JSONB,
+            tailoring_notes JSONB,
+            recruiter_bait_likelihood VARCHAR(20),
+            detailed_fit_analysis TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        self.bulk_create_table(create_table_sql, "strong_llm_results")
+
+        for job in deeply_analyzed_jobs:
+            strong_result = job.get('strong_llm_result', {})
+            insert_sql = """
+                INSERT INTO strong_llm_results (job_id, final_score, priority,
+                                               apply_recommendation, red_flags,
+                                               tailoring_notes, recruiter_bait_likelihood,
+                                               detailed_fit_analysis)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            self.conn.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                strong_result.get('final_score', 50),
+                strong_result.get('priority', 'medium'),
+                strong_result.get('apply_recommendation', 'maybe'),
+                json.dumps(strong_result.get('red_flags', [])),
+                json.dumps(strong_result.get('tailoring_notes', [])),
+                strong_result.get('recruiter_bait_likelihood', 'medium'),
+                strong_result.get('detailed_fit_analysis', '')
+            ), dbname=self.dbname)
+
+    def save_final_queue(self, final_queue: list):
+        """Persists Stage 8 final application queue to the final_application_queue table."""
+        create_table_sql = """
+        CREATE TABLE IF NOT EXISTS final_application_queue (
+            id SERIAL PRIMARY KEY,
+            job_id INTEGER NOT NULL UNIQUE,
+            final_score REAL,
+            priority VARCHAR(20),
+            apply_recommendation VARCHAR(20),
+            queue_position INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+        self.bulk_create_table(create_table_sql, "final_application_queue")
+
+        for position, job in enumerate(final_queue, start=1):
+            insert_sql = """
+                INSERT INTO final_application_queue (job_id, final_score, priority,
+                                                     apply_recommendation, queue_position)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (job_id) DO UPDATE SET
+                    final_score = EXCLUDED.final_score,
+                    priority = EXCLUDED.priority,
+                    apply_recommendation = EXCLUDED.apply_recommendation,
+                    queue_position = EXCLUDED.queue_position,
+                    created_at = CURRENT_TIMESTAMP
+            """
+            self.conn.execute_sql(insert_sql, params=(
+                job['metadata']['job_id'],
+                job.get('final_score', 0),
+                job.get('priority', 'medium'),
+                job.get('apply_recommendation', 'maybe'),
+                position
+            ), dbname=self.dbname)
+
     def get_archetype_embeddings(self, name: str):
         """Retrieves cached archetype embeddings from the database."""
         query = "SELECT title_embedding, skills_embedding, responsibilities_embedding, archetype_type, metadata FROM archetype_embeddings WHERE archetype_name = %s"
