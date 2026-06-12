@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from app.vector_engine import VectorEngine, LocalEmbeddingProvider
 
 @dataclass
@@ -11,7 +11,7 @@ class Archetype:
     title_embedding: Optional[np.ndarray] = None
     skills_embedding: Optional[np.ndarray] = None
     responsibilities_embedding: Optional[np.ndarray] = None
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def get_combined_embedding(self) -> Optional[np.ndarray]:
         """Returns a combined embedding from available archetype vectors."""

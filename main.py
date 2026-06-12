@@ -2,7 +2,7 @@
 import os
 from dotenv import load_dotenv
 import json
-from docx import Document  # type: ignore
+from docx import Document
 import re
 import json
 from jobspy import scrape_jobs

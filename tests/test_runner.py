@@ -542,4 +542,13 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    # Check for TUI mode
+    if "--tui" in sys.argv or "-t" in sys.argv:
+        # Remove the tui flag so argparse doesn't choke on it
+        sys.argv = [a for a in sys.argv if a not in ("--tui", "-t")]
+        from tests.test_tui import run_test_tui
+        run_test_tui()
+    else:
+        asyncio.run(main())

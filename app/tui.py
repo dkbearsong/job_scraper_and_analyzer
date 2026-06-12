@@ -272,7 +272,9 @@ class PipelineScreen(Screen[None]):
     """
 
     BINDINGS = [
-        Binding("ctrl+q", "app.quit", "Quit", show=False),
+        Binding("ctrl+q", "app.quit", "Quit", show=True),
+        Binding("q", "app.quit", "", show=False),
+        Binding("escape", "app.quit", "", show=False),
         Binding("ctrl+p", "focus_pipeline", "Pipeline", show=True),
         Binding("ctrl+j", "focus_jobs", "Jobs", show=True),
         Binding("ctrl+d", "focus_detail", "Detail", show=True),

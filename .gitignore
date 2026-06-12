@@ -2,8 +2,13 @@
 .env
 codereview.md
 main.py.backup
+user_preferences.yaml
 
 # Folders
+__pycache__/
+app/__pycache__/
+tests/__pycache__/
+archetype_profiles/
 .venv/
 documents/
 output/
