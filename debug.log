@@ -1,0 +1,510 @@
+15:24:06 [INFO   ] scraper.hiring_cafe: Starting standalone test: pages=1, headless=False, format=summary
+15:24:06 [INFO   ] scraper.HiringCafeAdapter: Configured: max_pages=1, headless=False
+15:24:06 [INFO   ] scraper.HiringCafeAdapter: Starting HiringCafe scraper...
+15:24:07 [INFO   ] scraper.HiringCafeAdapter: Navigating to https://hiring.cafe ...
+15:24:10 [INFO   ] scraper.HiringCafeAdapter: Waiting for session authorization...
+15:24:17 [INFO   ] scraper.HiringCafeAdapter: --- Processing Page 1 ---
+15:24:17 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Environmental Health & Safety Coordinator
+15:24:21 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:24:21 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:24:21 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Environmental Health & Safety Coordinator' @ 'Greensburg or Washington'
+15:24:21 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:24:25 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Environmental Health & Safety Coordinator|||Southland Steel Fabricators|||Greensburg or Washington|||$75k-$90k/yr|||Onsite' -> 'Environmental Health & Safety Coordinator|||Southland Steel Fabricators|||Amite, Louisiana, United States|||$75k-$90k/yr|||Onsite'
+15:24:26 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:24:29 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Environmental Health & Safety Coordinator|||Southland Steel Fabricators|||Amite, Louisiana, United States|||$75k-$90k/yr|||Onsite' -> 'Structural Steel Estimating Manager|||Southland Steel Fabricators|||Greensburg, Louisiana, United States|||$85k-$105k/yr|||Onsite'
+15:24:30 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:24:34 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Structural Steel Estimating Manager|||Southland Steel Fabricators|||Greensburg, Louisiana, United States|||$85k-$105k/yr|||Onsite' -> 'Fitter/Welder - Day & Night Shift|||Southland Steel Fabricators|||Greensburg, Louisiana, United States|||$20-$26/hr|||Onsite'
+15:24:35 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Southland Steel Fabricators' had more than 4 listings in this search
+15:24:35 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:24:35 [INFO   ] scraper.HiringCafeAdapter: Card 1: 'Environmental Health & Safety Coordinator' done.
+15:24:36 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Preschool Teacher/Center Director: Head Start
+15:24:40 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:24:40 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:24:40 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Preschool Teacher/Center Director: Head Start' @ 'Morris, New York, United States'
+15:24:40 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:24:43 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Preschool Teacher/Center Director: Head Start|||Opportunities for Otsego|||Morris, New York, United States||||||Full Time' -> 'Preschool Classroom Teacher: Head Start (Oneonta - SUCO)|||Opportunities for Otsego|||Oneonta, New York, United States||||||Full Time'
+15:24:44 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:24:48 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Preschool Classroom Teacher: Head Start (Oneonta - SUCO)|||Opportunities for Otsego|||Oneonta, New York, United States||||||Full Time' -> 'Head Start Recruiting and Outreach Coordinator|||Opportunities for Otsego|||Oneonta or Otsego County||||||Full Time'
+15:24:49 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:24:52 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Head Start Recruiting and Outreach Coordinator|||Opportunities for Otsego|||Oneonta or Otsego County||||||Full Time' -> 'Preschool Assistant Teacher: Head Start (Cooperstown)|||Opportunities for Otsego|||Cooperstown, New York, United States||||||Full Time'
+15:24:53 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Opportunities for Otsego' had more than 4 listings in this search
+15:24:53 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:24:53 [INFO   ] scraper.HiringCafeAdapter: Card 2: 'Preschool Teacher/Center Director: Head Start' done.
+15:24:55 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Executive Assistant - Sales & Marketing
+15:24:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:24:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:24:59 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Executive Assistant - Sales & Marketing' @ 'Bremen, Indiana, United States'
+15:24:59 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:25:02 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Executive Assistant - Sales & Marketing|||Digger Specialties|||Bremen, Indiana, United States||||||Full Time' -> 'Class A Driver|||Digger Specialties|||Bremen, Indiana, United States||||||Full Time'
+15:25:03 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:25:07 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Class A Driver|||Digger Specialties|||Bremen, Indiana, United States||||||Full Time' -> 'Production Worker - 3rd Shift|||Digger Specialties|||Bremen, Indiana, United States||||||Full Time'
+15:25:08 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:25:11 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Production Worker - 3rd Shift|||Digger Specialties|||Bremen, Indiana, United States||||||Full Time' -> 'Production Worker - 3rd Shift|||Digger Specialties|||Montgomery, Pennsylvania, United States||||||Full Time'
+15:25:12 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Digger Specialties' had more than 4 listings in this search
+15:25:12 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:25:12 [INFO   ] scraper.HiringCafeAdapter: Card 3: 'Executive Assistant - Sales & Marketing' done.
+15:25:13 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Colly Brake Press Operator
+15:25:17 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:25:17 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:25:17 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Colly Brake Press Operator' @ 'Canton, Ohio, United States'
+15:25:17 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:25:21 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Colly Brake Press Operator|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time' -> 'Set up Welder|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time'
+15:25:22 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:25:25 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Set up Welder|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time' -> 'Utility Design Engineer|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time'
+15:25:26 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:25:30 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Utility Design Engineer|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time' -> 'Mobile Equipment Repair|||Union Metal Industries Corporation|||Canton, Ohio, United States||||||Full Time'
+15:25:31 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Union Metal Industries Corporation' had more than 4 listings in this search
+15:25:31 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:25:31 [INFO   ] scraper.HiringCafeAdapter: Card 4: 'Colly Brake Press Operator' done.
+15:25:32 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Direct Support Professional- 3rd shift/ Evansville/ Newburgh
+15:25:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:25:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:25:36 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Direct Support Professional- 3rd shift/ Evansville/ Newburgh' @ 'Evansville or Newburgh'
+15:25:36 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:25:39 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Direct Support Professional- 3rd shift/ Evansville/ Newburgh|||Easterseals Rehabilitation Center|||Evansville or Newburgh||||||Full Time' -> 'Clinical Psychologist|||Easterseals Rehabilitation Center|||Evansville, Indiana, United States||||||Full Time'
+15:25:40 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:25:44 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Clinical Psychologist|||Easterseals Rehabilitation Center|||Evansville, Indiana, United States||||||Full Time' -> 'Group Home Assistant Manager|||Easterseals Rehabilitation Center|||Evansville, Indiana, United States||||||Full Time'
+15:25:45 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:25:48 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Group Home Assistant Manager|||Easterseals Rehabilitation Center|||Evansville, Indiana, United States||||||Full Time' -> 'Direct Support Professional|||Easterseals Rehabilitation Center|||Chandler, Indiana, United States||||||Full Time'
+15:25:49 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Easterseals Rehabilitation Center' had more than 4 listings in this search
+15:25:49 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:25:49 [INFO   ] scraper.HiringCafeAdapter: Card 5: 'Direct Support Professional- 3rd shift/ Evansville/ Newburgh' done.
+15:25:50 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Certified Medical Assistant II
+15:25:54 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:25:54 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:25:54 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Certified Medical Assistant II' @ 'Shrewsbury, Massachusetts, United States'
+15:25:54 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:25:57 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Certified Medical Assistant II|||HealthyU Clinics|||Shrewsbury, Massachusetts, United States|||$22-$23/hr|||Onsite' -> 'Medical Assistant / Front Office Coordinator|||HealthyU Clinics|||Shrewsbury, Massachusetts, United States|||$22-$24/hr|||Onsite'
+15:25:58 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:26:02 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Medical Assistant / Front Office Coordinator|||HealthyU Clinics|||Shrewsbury, Massachusetts, United States|||$22-$24/hr|||Onsite' -> 'Certified Medical Assistant|||HealthyU Clinics|||Phoenix, Arizona, United States|||$21-$23/hr|||Onsite'
+15:26:03 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:26:06 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Certified Medical Assistant|||HealthyU Clinics|||Phoenix, Arizona, United States|||$21-$23/hr|||Onsite' -> 'Advanced Practice Provider|||HealthyU Clinics|||Rancho Mirage, California, United States|||$120k-$180k/yr|||Onsite'
+15:26:07 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'HealthyU Clinics' had more than 4 listings in this search
+15:26:07 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:26:07 [INFO   ] scraper.HiringCafeAdapter: Card 6: 'Certified Medical Assistant II' done.
+15:26:08 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Customer Service Specialist
+15:26:12 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:26:12 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:26:12 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Customer Service Specialist' @ 'Rock Island, Illinois, United States'
+15:26:12 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:26:16 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Customer Service Specialist|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$20/hr|||Onsite' -> 'Firearms Customer Support Representative I|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$20/hr|||Onsite'
+15:26:17 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:26:20 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Firearms Customer Support Representative I|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$20/hr|||Onsite' -> 'Lead Backend Engineer (API Architect)|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$127k-$170k/yr|||Onsite'
+15:26:21 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:26:25 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Lead Backend Engineer (API Architect)|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$127k-$170k/yr|||Onsite' -> 'Senior Business Systems Analyst|||Rock Island Auction Company|||Rock Island, Illinois, United States|||$89k-$128k/yr|||Onsite'
+15:26:26 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Rock Island Auction Company' had more than 4 listings in this search
+15:26:26 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:26:26 [INFO   ] scraper.HiringCafeAdapter: Card 7: 'Customer Service Specialist' done.
+15:26:27 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Kitchen Support PRN
+15:26:31 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:26:31 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:26:31 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Kitchen Support PRN' @ 'Cape Girardeau, Missouri, United States'
+15:26:31 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:26:34 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Kitchen Support PRN|||Catholic Charities of Southern Missouri|||Cape Girardeau, Missouri, United States|||$15/hr|||Onsite' -> 'Case Manager|||Catholic Charities of Southern Missouri|||Cape Girardeau, Missouri, United States|||$18-$19/hr|||Onsite'
+15:26:35 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:26:39 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Case Manager|||Catholic Charities of Southern Missouri|||Cape Girardeau, Missouri, United States|||$18-$19/hr|||Onsite' -> 'Developmental Disability Program Manager|||Catholic Charities of Southern Missouri|||Poplar Bluff, Missouri, United States|||$46k-$49k/yr|||Onsite'
+15:26:40 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:26:43 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Developmental Disability Program Manager|||Catholic Charities of Southern Missouri|||Poplar Bluff, Missouri, United States|||$46k-$49k/yr|||Onsite' -> 'Developmental Disability Administrative Assistant|||Catholic Charities of Southern Missouri|||Cape Girardeau, Missouri, United States|||$15-$16/hr|||Onsite'
+15:26:44 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Catholic Charities of Southern Missouri' had more than 4 listings in this search
+15:26:44 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:26:44 [INFO   ] scraper.HiringCafeAdapter: Card 8: 'Kitchen Support PRN' done.
+15:26:45 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Behavioral Health Technician
+15:26:49 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:26:49 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:26:49 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Behavioral Health Technician' @ 'Owensboro, Kentucky, United States'
+15:26:49 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:26:53 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Behavioral Health Technician|||Volunteers of America Mid-States|||Owensboro, Kentucky, United States||||||Full Time' -> 'Case Manager I|||Volunteers of America Mid-States|||Johnson City, Tennessee, United States||||||Full Time'
+15:26:54 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:26:57 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Case Manager I|||Volunteers of America Mid-States|||Johnson City, Tennessee, United States||||||Full Time' -> 'STAFF ACCOUNTANT|||Volunteers of America Mid-States|||Louisville, Kentucky, United States||||||Full Time'
+15:26:58 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:27:02 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'STAFF ACCOUNTANT|||Volunteers of America Mid-States|||Louisville, Kentucky, United States||||||Full Time' -> 'Restorative Justice Case Manager Specialist Lead "Internal Applicants Only"|||Volunteers of America Mid-States|||Louisville, Kentucky, United States||||||Full Time'
+15:27:03 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Volunteers of America Mid-States' had more than 4 listings in this search
+15:27:03 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:27:03 [INFO   ] scraper.HiringCafeAdapter: Card 9: 'Behavioral Health Technician' done.
+15:27:04 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Sales Supervisor
+15:27:08 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:27:08 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:27:08 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Sales Supervisor' @ 'Augusta, Georgia, United States'
+15:27:08 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:27:11 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Sales Supervisor|||American Freight|||Augusta, Georgia, United States|||$45k-$62k/yr|||Onsite' -> 'Sales Supervisor|||American Freight|||Columbus, Ohio, United States|||$45k-$62k/yr|||Onsite'
+15:27:12 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:27:16 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Sales Supervisor|||American Freight|||Columbus, Ohio, United States|||$45k-$62k/yr|||Onsite' -> 'General Manager|||American Freight|||Columbus, Ohio, United States|||$55k-$85k/yr|||Onsite'
+15:27:17 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:27:20 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'General Manager|||American Freight|||Columbus, Ohio, United States|||$55k-$85k/yr|||Onsite' -> 'Max Home Furnishings General Manager|||American Freight|||Sallisaw, Oklahoma, United States|||$45k-$90k/yr|||Onsite'
+15:27:21 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'American Freight' had more than 4 listings in this search
+15:27:21 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:27:21 [INFO   ] scraper.HiringCafeAdapter: Card 10: 'Sales Supervisor' done.
+15:27:22 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Part-Time CityGate Grille Food Runner & Busser
+15:27:26 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:27:26 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:27:26 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Part-Time CityGate Grille Food Runner & Busser' @ 'Illinois, United States'
+15:27:26 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:27:30 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Part-Time CityGate Grille Food Runner & Busser|||CityGate Hospitality|||Illinois, United States|||$9/hr|||Onsite' -> 'Full-Time Hotel Arista Steward/Dishwasher|||CityGate Hospitality|||Naperville, Illinois, United States|||$17-$19/hr|||Onsite'
+15:27:31 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:27:34 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Full-Time Hotel Arista Steward/Dishwasher|||CityGate Hospitality|||Naperville, Illinois, United States|||$17-$19/hr|||Onsite' -> 'Full-Time CityGate Grille Cook|||CityGate Hospitality|||Naperville, Illinois, United States|||$23-$25/hr|||Onsite'
+15:27:35 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:27:39 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Full-Time CityGate Grille Cook|||CityGate Hospitality|||Naperville, Illinois, United States|||$23-$25/hr|||Onsite' -> 'Full-Time Hotel Arista Room Attendant|||CityGate Hospitality|||Naperville, Illinois, United States|||$18-$20/hr|||Onsite'
+15:27:40 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'CityGate Hospitality' had more than 4 listings in this search
+15:27:40 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:27:40 [INFO   ] scraper.HiringCafeAdapter: Card 11: 'Part-Time CityGate Grille Food Runner & Busser' done.
+15:27:40 [INFO   ] scraper.HiringCafeAdapter: Opening details for: CCT Load Support Technician
+15:27:44 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:27:44 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:27:44 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'CCT Load Support Technician' @ 'Altus, Oklahoma, United States'
+15:27:44 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:27:48 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'CCT Load Support Technician|||C2 Technologies|||Altus, Oklahoma, United States|||$40-$60/hr|||Onsite' -> 'Web Design Specialist|||C2 Technologies|||Arlington, Virginia, United States||||||Full Time'
+15:27:49 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:27:52 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Web Design Specialist|||C2 Technologies|||Arlington, Virginia, United States||||||Full Time' -> 'Regional Maintenance Manager|||C2 Technologies|||McChord AFB, Washington, United States||||||Full Time'
+15:27:53 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:27:57 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Regional Maintenance Manager|||C2 Technologies|||McChord AFB, Washington, United States||||||Full Time' -> 'UI Designer|||C2 Technologies|||Arlington, Virginia, United States||||||Full Time'
+15:27:58 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'C2 Technologies' had more than 4 listings in this search
+15:27:58 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:27:58 [INFO   ] scraper.HiringCafeAdapter: Card 12: 'CCT Load Support Technician' done.
+15:27:59 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Human Resource Manager (Reno, US)
+15:28:03 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:28:03 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:28:03 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Human Resource Manager (Reno, US)' @ 'Reno, Nevada, United States'
+15:28:03 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:28:05 [INFO   ] scraper.HiringCafeAdapter: Card metadata did not change after button click — no more listings to toggle through. Still: 'Human Resource Manager (Reno, US)' @ 'Reno, Nevada, United States'
+15:28:05 [INFO   ] scraper.HiringCafeAdapter: Card 13: 'Human Resource Manager (Reno, US)' done.
+15:28:06 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Physician - Pediatrician
+15:28:10 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:28:10 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:28:10 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Physician - Pediatrician' @ 'West Burlington, Iowa, United States'
+15:28:10 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:28:13 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Physician - Pediatrician|||Community Health Centers of Southeastern Iowa|||West Burlington, Iowa, United States||||||Full Time' -> 'Patient Access Representative|||Community Health Centers of Southeastern Iowa|||Keokuk, Iowa, United States|||$16/hr|||Onsite'
+15:28:14 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:28:18 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Patient Access Representative|||Community Health Centers of Southeastern Iowa|||Keokuk, Iowa, United States|||$16/hr|||Onsite' -> 'Patient Access Representative|||Community Health Centers of Southeastern Iowa|||West Burlington, Iowa, United States|||$16/hr|||Onsite'
+15:28:19 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:28:22 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Patient Access Representative|||Community Health Centers of Southeastern Iowa|||West Burlington, Iowa, United States|||$16/hr|||Onsite' -> 'Clinical Support|||Community Health Centers of Southeastern Iowa|||Keokuk, Iowa, United States||||||Full Time'
+15:28:23 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Community Health Centers of Southeastern Iowa' had more than 4 listings in this search
+15:28:23 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:28:23 [INFO   ] scraper.HiringCafeAdapter: Card 14: 'Physician - Pediatrician' done.
+15:28:24 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Urology Scrub Technician
+15:28:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:28:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:28:28 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Urology Scrub Technician' @ 'Waterbury, Connecticut, United States'
+15:28:28 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:28:31 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Urology Scrub Technician|||United Medical Systems|||Waterbury, Connecticut, United States||||||Full Time' -> 'Urology Scrub Technician|||United Medical Systems|||Carrollwood, Florida, United States||||||Full Time'
+15:28:32 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:28:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Urology Scrub Technician|||United Medical Systems|||Carrollwood, Florida, United States||||||Full Time' -> 'Urology Scrub Technician|||United Medical Systems|||Sarasota, Florida, United States||||||Full Time'
+15:28:37 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:28:40 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Urology Scrub Technician|||United Medical Systems|||Sarasota, Florida, United States||||||Full Time' -> 'Laser Engineer III|||United Medical Systems|||Macon, Georgia, United States|||$30-$34/hr|||Field'
+15:28:41 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'United Medical Systems' had more than 4 listings in this search
+15:28:41 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:28:41 [INFO   ] scraper.HiringCafeAdapter: Card 15: 'Urology Scrub Technician' done.
+15:28:42 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Medical Assistant
+15:28:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:28:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:28:46 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Medical Assistant' @ 'Pensacola, Florida, United States'
+15:28:46 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:28:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Medical Assistant|||AllerVie Health|||Pensacola, Florida, United States||||||Full Time' -> 'Medical Assistant|||AllerVie Health|||Cape Coral or Fort Myers||||||Full Time'
+15:28:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:28:54 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Medical Assistant|||AllerVie Health|||Cape Coral or Fort Myers||||||Full Time' -> 'Medical Assistant II|||AllerVie Health|||Silver Spring, Maryland, United States|||$20/hr|||Onsite'
+15:28:55 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:28:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Medical Assistant II|||AllerVie Health|||Silver Spring, Maryland, United States|||$20/hr|||Onsite' -> 'Corporate Development, Healthcare Associate|||AllerVie Health|||Frisco, Texas, United States||||||Full Time'
+15:29:00 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'AllerVie Health' had more than 4 listings in this search
+15:29:00 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:29:00 [INFO   ] scraper.HiringCafeAdapter: Card 16: 'Medical Assistant' done.
+15:29:01 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Material Handler / Forklift Operator
+15:29:05 [INFO   ] scraper.HiringCafeAdapter: No multi-listing toggle control found on card. Card HTML (first 500 chars): <div><div class="relative xl:z-10"><div class="relative bg-white rounded-xl border border-gray-200 shadow hover:border-gray-500 md:hover:border-gray-200 "><div class="md:h-[340px] relative flex flex-col items-start w-full rounded-x-lg rounded-t-lg py-1.5 px-3 overflow-hidden cursor-pointer md:cursor-default transition-opacity duration-300 opacity-100  "><div class="absolute inset-y-0 left-0 w-full cursor-zoom-in"><div class="absolute inset-y-0 left-0 bg-black w-full opacity-50"></div><div class=
+15:29:05 [INFO   ] scraper.HiringCafeAdapter: Card 17: 'Material Handler / Forklift Operator' done.
+15:29:06 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Bar Captain - Edgartown, MA
+15:29:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:29:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:29:09 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Bar Captain - Edgartown, MA' @ 'Edgartown, Massachusetts, United States'
+15:29:09 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:29:13 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Bar Captain - Edgartown, MA|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$15/hr|||Onsite' -> 'Restaurant Floor Manager - Edgartown, MA|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$2k-$2k/wk|||Onsite'
+15:29:14 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:29:17 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Restaurant Floor Manager - Edgartown, MA|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$2k-$2k/wk|||Onsite' -> 'Housekeeping Attendant - Edgartown, MA|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$19-$20/hr|||Onsite'
+15:29:18 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:29:22 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Housekeeping Attendant - Edgartown, MA|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$19-$20/hr|||Onsite' -> 'Housekeeping Attendant|||Collared Martin Hospitality|||Edgartown, Massachusetts, United States|||$19-$20/hr|||Onsite'
+15:29:23 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Collared Martin Hospitality' had more than 4 listings in this search
+15:29:23 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:29:23 [INFO   ] scraper.HiringCafeAdapter: Card 18: 'Bar Captain - Edgartown, MA' done.
+15:29:24 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Clinic Admissions Associate
+15:29:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:29:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:29:28 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Clinic Admissions Associate' @ 'New Caney, Texas, United States'
+15:29:28 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:29:31 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Clinic Admissions Associate|||Action Behavior Centers|||New Caney, Texas, United States|||$19-$22/hr|||Onsite' -> 'BCBA Clinical Director|||Action Behavior Centers|||Dallas, Texas, United States|||$120k/yr|||Hybrid'
+15:29:32 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:29:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'BCBA Clinical Director|||Action Behavior Centers|||Dallas, Texas, United States|||$120k/yr|||Hybrid' -> 'Sr. Financial Analyst - Special Projects (Austin based)|||Action Behavior Centers|||Austin, Texas, United States|||$75k-$80k/yr|||Onsite'
+15:29:37 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:29:40 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Sr. Financial Analyst - Special Projects (Austin based)|||Action Behavior Centers|||Austin, Texas, United States|||$75k-$80k/yr|||Onsite' -> 'INTERNAL ONLY - Charges Specialist I|||Action Behavior Centers|||Austin, Texas, United States||||||Full Time'
+15:29:41 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Action Behavior Centers' had more than 4 listings in this search
+15:29:41 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:29:41 [INFO   ] scraper.HiringCafeAdapter: Card 19: 'Clinic Admissions Associate' done.
+15:29:43 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Medical Laboratory Scientist (MLS) PRN Traveler
+15:29:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:29:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:29:46 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Medical Laboratory Scientist (MLS) PRN Traveler' @ 'Shawnee, Oklahoma, United States'
+15:29:46 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:29:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Medical Laboratory Scientist (MLS) PRN Traveler|||FehDan Meat Processing|||Shawnee, Oklahoma, United States||||||Contract, Temporary' -> 'Licensed Practical Nurse|||FehDan Meat Processing|||Prague, Oklahoma, United States||||||Full Time'
+15:29:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:29:54 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Licensed Practical Nurse|||FehDan Meat Processing|||Prague, Oklahoma, United States||||||Full Time' -> 'Account Executive|||FehDan Meat Processing|||Lawton, Oklahoma, United States||||||Full Time'
+15:29:55 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:29:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Account Executive|||FehDan Meat Processing|||Lawton, Oklahoma, United States||||||Full Time' -> 'Home Health RN Case Manger Sign on Bonus $2500|||FehDan Meat Processing|||Shawnee, Oklahoma, United States||||||Full Time'
+15:30:00 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'FehDan Meat Processing' had more than 4 listings in this search
+15:30:00 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:30:00 [INFO   ] scraper.HiringCafeAdapter: Card 20: 'Medical Laboratory Scientist (MLS) PRN Traveler' done.
+15:30:01 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Senior National Account Manager - Dollar General (Null, US)
+15:30:05 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:30:05 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:30:05 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Senior National Account Manager - Dollar General (Null, US)' @ 'Nashville, Tennessee, United States'
+15:30:05 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:30:08 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Senior National Account Manager - Dollar General (Null, US)|||BIC|||Nashville, Tennessee, United States||||||Full Time' -> 'HVAC Controls I (Milford, CT, US)|||BIC|||Milford, Connecticut, United States||||||Full Time'
+15:30:09 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:30:13 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'HVAC Controls I (Milford, CT, US)|||BIC|||Milford, Connecticut, United States||||||Full Time' -> 'Senior Plant Technical Manager (Charlotte, US)|||BIC|||Charlotte, North Carolina, United States|||$140k/yr|||Onsite'
+15:30:14 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:30:17 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Senior Plant Technical Manager (Charlotte, US)|||BIC|||Charlotte, North Carolina, United States|||$140k/yr|||Onsite' -> 'Electrician I (Milford, CT, US)|||BIC|||Milford, Connecticut, United States||||||Full Time'
+15:30:18 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'BIC' had more than 4 listings in this search
+15:30:18 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:30:18 [INFO   ] scraper.HiringCafeAdapter: Card 21: 'Senior National Account Manager - Dollar General (Null, US)' done.
+15:30:20 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Sup, Field Operations (Kansas City, MO, US, 64129)
+15:30:23 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:30:24 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:30:24 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Sup, Field Operations (Kansas City, MO, US, 64129)' @ 'Kansas City, Missouri, United States'
+15:30:24 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:30:27 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Sup, Field Operations (Kansas City, MO, US, 64129)|||Spire|||Kansas City, Missouri, United States||||||Full Time' -> 'Eng I, Gas (Kansas City, MO, US, 64129)|||Spire|||Kansas City, Missouri, United States||||||Full Time'
+15:30:28 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:30:32 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Eng I, Gas (Kansas City, MO, US, 64129)|||Spire|||Kansas City, Missouri, United States||||||Full Time' -> 'Eng I, Compliance (Saint Louis, MO, US, 63101)|||Spire|||Saint Louis, Missouri, United States||||||Full Time'
+15:30:33 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:30:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Eng I, Compliance (Saint Louis, MO, US, 63101)|||Spire|||Saint Louis, Missouri, United States||||||Full Time' -> 'Representative, Customer Solutions (Birmingham, AL, US, 35203)|||Spire|||Birmingham, Alabama, United States||||||Full Time'
+15:30:37 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Spire' had more than 4 listings in this search
+15:30:37 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:30:37 [INFO   ] scraper.HiringCafeAdapter: Card 22: 'Sup, Field Operations (Kansas City, MO, US, 64129)' done.
+15:30:38 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Corporate Accounting Manager (Denver, CO, US, 80211)
+15:30:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:30:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:30:42 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Corporate Accounting Manager (Denver, CO, US, 80211)' @ 'Denver, Colorado, United States'
+15:30:42 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:30:45 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Corporate Accounting Manager (Denver, CO, US, 80211)|||Leprino Foods|||Denver, Colorado, United States|||$113k-$128k/yr|||Onsite' -> 'Global Account Analyst (Denver, CO, US, 80211)|||Leprino Foods|||Denver, Colorado, United States|||$73k-$81k/yr|||Onsite'
+15:30:46 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:30:49 [INFO   ] scraper.HiringCafeAdapter: Attempt 1: still loading, waiting and retrying...
+15:30:53 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Global Account Analyst (Denver, CO, US, 80211)|||Leprino Foods|||Denver, Colorado, United States|||$73k-$81k/yr|||Onsite' -> 'Global Account Analyst (Denver, CO, US, 80211)|||Leprino Foods|||Denver, Colorado, United States||||||Full Time'
+15:30:54 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:30:57 [INFO   ] scraper.HiringCafeAdapter: Attempt 1: still loading, waiting and retrying...
+15:31:00 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Global Account Analyst (Denver, CO, US, 80211)|||Leprino Foods|||Denver, Colorado, United States||||||Full Time' -> 'LUB Warehouse Forklift Mechanic (Lubbock, TX, US, 79401)|||Leprino Foods|||Lubbock, Texas, United States|||$37/hr|||Onsite'
+15:31:01 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Leprino Foods' had more than 4 listings in this search
+15:31:01 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:31:01 [INFO   ] scraper.HiringCafeAdapter: Card 23: 'Corporate Accounting Manager (Denver, CO, US, 80211)' done.
+15:31:02 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Assembler
+15:31:04 [INFO   ] scraper.HiringCafeAdapter: Attempt 1: still loading, waiting and retrying...
+15:31:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:31:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:31:09 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Assembler' @ 'Holland, Michigan, United States'
+15:31:09 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:31:12 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Assembler|||OMT-Veyhl|||Holland, Michigan, United States||||||Full Time' -> 'Custom Assembler|||OMT-Veyhl|||Holland, Michigan, United States||||||Full Time'
+15:31:13 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:31:17 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Custom Assembler|||OMT-Veyhl|||Holland, Michigan, United States||||||Full Time' -> 'Machine Operator|||OMT-Veyhl|||Holland, Michigan, United States|||$18-$20/hr|||Onsite'
+15:31:18 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:31:21 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Machine Operator|||OMT-Veyhl|||Holland, Michigan, United States|||$18-$20/hr|||Onsite' -> 'Packaging Engineer|||OMT-Veyhl|||Holland, Michigan, United States|||$85k/yr|||Onsite'
+15:31:22 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'OMT-Veyhl' had more than 4 listings in this search
+15:31:22 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:31:22 [INFO   ] scraper.HiringCafeAdapter: Card 24: 'Assembler' done.
+15:31:24 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Assembler (Delhi, IA, US, 52223)
+15:31:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:31:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:31:28 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Assembler (Delhi, IA, US, 52223)' @ 'Delhi or Manchester'
+15:31:28 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:31:31 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Assembler (Delhi, IA, US, 52223)|||Epiroc|||Delhi or Manchester||||||Full Time' -> 'Service Technician (Harrisburg, PA, US, 17122)|||Epiroc|||Harrisburg, Pennsylvania, United States||||||Full Time'
+15:31:32 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:31:36 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Service Technician (Harrisburg, PA, US, 17122)|||Epiroc|||Harrisburg, Pennsylvania, United States||||||Full Time' -> 'Autonomous Haulage System Leader (Garland, TX, US, 75040)|||Epiroc|||Garland, Texas, United States||||||Full Time'
+15:31:37 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:31:40 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Autonomous Haulage System Leader (Garland, TX, US, 75040)|||Epiroc|||Garland, Texas, United States||||||Full Time' -> 'Field Service Technician (Elko, NV, US, 89801)|||Epiroc|||Elko, Nevada, United States|||$45-$52/hr|||Field'
+15:31:41 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Epiroc' had more than 4 listings in this search
+15:31:41 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:31:41 [INFO   ] scraper.HiringCafeAdapter: Card 25: 'Assembler (Delhi, IA, US, 52223)' done.
+15:31:42 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Hiring Event - Maumee, OH (Maumee, OH, US, 43537)
+15:31:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:31:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:31:46 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Hiring Event - Maumee, OH (Maumee, OH, US, 43537)' @ 'Maumee, Ohio, United States'
+15:31:46 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:31:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Hiring Event - Maumee, OH (Maumee, OH, US, 43537)|||Sun Chemical|||Maumee, Ohio, United States|||$21-$22/hr|||Onsite' -> 'Shipping & Receiving Operator (Maumee, OH, US, 43537)|||Sun Chemical|||Maumee, Ohio, United States|||$21-$22/hr|||Onsite'
+15:31:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:31:54 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Shipping & Receiving Operator (Maumee, OH, US, 43537)|||Sun Chemical|||Maumee, Ohio, United States|||$21-$22/hr|||Onsite' -> 'Production Operator (Minneapolis, MN, US, 55414)|||Sun Chemical|||Minneapolis, Minnesota, United States|||$22/hr|||Onsite'
+15:31:55 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:31:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Production Operator (Minneapolis, MN, US, 55414)|||Sun Chemical|||Minneapolis, Minnesota, United States|||$22/hr|||Onsite' -> 'Tech III Inplant Morris Lebanon (Cincinnati, OH, US, 45246)|||Sun Chemical|||Cincinnati or Lebanon or Parsippany||||||Full Time'
+15:32:00 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Sun Chemical' had more than 4 listings in this search
+15:32:00 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:32:00 [INFO   ] scraper.HiringCafeAdapter: Card 26: 'Hiring Event - Maumee, OH (Maumee, OH, US, 43537)' done.
+15:32:01 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Field Accountant
+15:32:05 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:32:05 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:32:05 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Field Accountant' @ 'Chicago, Illinois, United States'
+15:32:05 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:32:08 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Field Accountant|||VINCI Construction Grands Projets USA|||Chicago, Illinois, United States|||$80k-$90k/yr|||Onsite' -> 'Field Engineer|||VINCI Construction Grands Projets USA|||Chicago, Illinois, United States|||$80k-$100k/yr|||Onsite'
+15:32:09 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:32:13 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Field Engineer|||VINCI Construction Grands Projets USA|||Chicago, Illinois, United States|||$80k-$100k/yr|||Onsite' -> 'FIELD ENGINEER|||VINCI Construction Grands Projets USA|||Norfolk, Virginia, United States||||||Full Time'
+15:32:14 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:32:46 [INFO   ] scraper.HiringCafeAdapter: Card metadata did not change after button click — no more listings to toggle through. Still: 'Field Accountant' @ 'Chicago, Illinois, United States'
+15:32:46 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 2 extra job(s) for this card.
+15:32:46 [INFO   ] scraper.HiringCafeAdapter: Card 27: 'Field Accountant' done.
+15:32:47 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Housing Program Specialist
+15:32:51 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:32:51 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:32:51 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Housing Program Specialist' @ 'Bellingham, Washington, United States'
+15:32:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:32:55 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Housing Program Specialist|||Opportunity Council|||Bellingham, Washington, United States|||$25-$27/hr|||Onsite' -> 'Veterans Housing Services Navigator|||Opportunity Council|||Bellingham or Whatcom County|||$25-$27/hr|||Field'
+15:32:56 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:32:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Veterans Housing Services Navigator|||Opportunity Council|||Bellingham or Whatcom County|||$25-$27/hr|||Field' -> 'Wellness and Engagement Specialist|||Opportunity Council|||Bellingham, Washington, United States|||$21-$26/hr|||Onsite'
+15:33:00 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:33:04 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Wellness and Engagement Specialist|||Opportunity Council|||Bellingham, Washington, United States|||$21-$26/hr|||Onsite' -> 'Housing Case Manager: Island County|||Opportunity Council|||Oak Harbor or Island County|||$23-$26/hr|||Field'
+15:33:05 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Opportunity Council' had more than 4 listings in this search
+15:33:05 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:33:05 [INFO   ] scraper.HiringCafeAdapter: Card 28: 'Housing Program Specialist' done.
+15:33:06 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Torrance Showroom Customer Service
+15:33:10 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:33:10 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:33:10 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Torrance Showroom Customer Service' @ 'Torrance, California, United States'
+15:33:10 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:33:14 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Torrance Showroom Customer Service|||Jerome's Furniture|||Torrance, California, United States|||$18-$21/hr|||Onsite' -> 'Distribution Center Full-Time Warehouse Associate|||Jerome's Furniture|||San Diego, California, United States|||$18/hr|||Onsite'
+15:33:14 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:33:18 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Distribution Center Full-Time Warehouse Associate|||Jerome's Furniture|||San Diego, California, United States|||$18/hr|||Onsite' -> 'West Covina Sales Associate|||Jerome's Furniture|||West Covina, California, United States|||$17/hr|||Onsite'
+15:33:19 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:33:22 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'West Covina Sales Associate|||Jerome's Furniture|||West Covina, California, United States|||$17/hr|||Onsite' -> 'English and Spanish Speaking Call Center Representative|||Jerome's Furniture|||San Diego, California, United States|||$18-$19/hr|||Onsite'
+15:33:23 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Jerome's Furniture' had more than 4 listings in this search
+15:33:23 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:33:23 [INFO   ] scraper.HiringCafeAdapter: Card 29: 'Torrance Showroom Customer Service' done.
+15:33:25 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Welder I
+15:33:29 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:33:29 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:33:29 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Welder I' @ 'Cleveland, Mississippi, United States'
+15:33:29 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:33:32 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Welder I|||Quality Steel Corporation|||Cleveland, Mississippi, United States||||||Full Time' -> 'Maintenance Technician|||Quality Steel Corporation|||West Jordan, Utah, United States||||||Full Time'
+15:33:33 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:33:37 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Maintenance Technician|||Quality Steel Corporation|||West Jordan, Utah, United States||||||Full Time' -> 'Yard Operator|||Quality Steel Corporation|||West Jordan, Utah, United States||||||Full Time'
+15:33:38 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:33:41 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Yard Operator|||Quality Steel Corporation|||West Jordan, Utah, United States||||||Full Time' -> 'Welder I|||Quality Steel Corporation|||West Jordan, Utah, United States||||||Full Time'
+15:33:42 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Quality Steel Corporation' had more than 4 listings in this search
+15:33:42 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:33:42 [INFO   ] scraper.HiringCafeAdapter: Card 30: 'Welder I' done.
+15:33:43 [INFO   ] scraper.HiringCafeAdapter: Opening details for: E-Commerce Processor-Lister Shipper-Photographer - FT
+15:33:47 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:33:47 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:33:47 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'E-Commerce Processor-Lister Shipper-Photographer - FT' @ 'Tallahassee, Florida, United States'
+15:33:47 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:33:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'E-Commerce Processor-Lister Shipper-Photographer - FT|||Goodwill Industries-Big Bend|||Tallahassee, Florida, United States|||$14/hr|||Onsite' -> 'Warehouse Support - PT|||Goodwill Industries-Big Bend|||Tallahassee, Florida, United States|||$14/hr|||Onsite'
+15:33:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:33:55 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Warehouse Support - PT|||Goodwill Industries-Big Bend|||Tallahassee, Florida, United States|||$14/hr|||Onsite' -> 'Soft Lines Processor - PT|||Goodwill Industries-Big Bend|||Crestview, Florida, United States|||$14/hr|||Onsite'
+15:33:56 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:33:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Soft Lines Processor - PT|||Goodwill Industries-Big Bend|||Crestview, Florida, United States|||$14/hr|||Onsite' -> 'Lead Associate - FT|||Goodwill Industries-Big Bend|||Panama City, Florida, United States|||$15/hr|||Onsite'
+15:34:00 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Goodwill Industries-Big Bend' had more than 4 listings in this search
+15:34:00 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:34:00 [INFO   ] scraper.HiringCafeAdapter: Card 31: 'E-Commerce Processor-Lister Shipper-Photographer - FT' done.
+15:34:02 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Welder III (Crosby, MN, US, 56441)
+15:34:06 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:34:06 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:34:06 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Welder III (Crosby, MN, US, 56441)' @ 'Crosby, Minnesota, United States'
+15:34:06 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:34:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Welder III (Crosby, MN, US, 56441)|||Graphic Packaging International|||Crosby, Minnesota, United States|||$48k-$59k/yr|||Onsite' -> 'Press Technician (Perry, GA, US, 31069)|||Graphic Packaging International|||Perry, Georgia, United States||||||Full Time'
+15:34:10 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:34:14 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Press Technician (Perry, GA, US, 31069)|||Graphic Packaging International|||Perry, Georgia, United States||||||Full Time' -> 'Shipping-Receiving (Stone Mountain, GA, US, 30083)|||Graphic Packaging International|||Stone Mountain, Georgia, United States||||||Full Time'
+15:34:15 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:34:18 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Shipping-Receiving (Stone Mountain, GA, US, 30083)|||Graphic Packaging International|||Stone Mountain, Georgia, United States||||||Full Time' -> 'Operations Manager (Omaha, NE, US, 68137)|||Graphic Packaging International|||Omaha, Nebraska, United States|||$117k-$156k/yr|||Onsite'
+15:34:19 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Graphic Packaging International' had more than 4 listings in this search
+15:34:19 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:34:19 [INFO   ] scraper.HiringCafeAdapter: Card 32: 'Welder III (Crosby, MN, US, 56441)' done.
+15:34:20 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Climbing Arborist Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)
+15:34:24 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:34:24 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:34:24 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Climbing Arborist Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)' @ 'Auburn Hills, Michigan, United States'
+15:34:24 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:34:28 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Climbing Arborist Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Multiple Commitments Available' -> 'Landscape Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Full Time'
+15:34:29 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:34:32 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Landscape Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Full Time' -> 'Plant Healthcare Technician | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Full Time'
+15:34:33 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:34:37 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Plant Healthcare Technician | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Full Time' -> 'Climbing Arborist Trainee | Auburn Hills, MI (Auburn Hills, MI, US, 48326)|||The Davey Tree Expert Company|||Auburn Hills, Michigan, United States||||||Full Time, Temporary'
+15:34:38 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'The Davey Tree Expert Company' had more than 4 listings in this search
+15:34:38 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:34:38 [INFO   ] scraper.HiringCafeAdapter: Card 33: 'Climbing Arborist Crew Leader | Auburn Hills, MI (Auburn Hills, MI, US, 48326)' done.
+15:34:38 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Production and Technical Manager
+15:34:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:34:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:34:42 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Production and Technical Manager' @ 'Hampton Bays, New York, United States'
+15:34:42 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:34:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Production and Technical Manager|||Main Street Hospitality|||Hampton Bays, New York, United States||||||Full Time' -> 'General Manager|||Main Street Hospitality|||Newport, Rhode Island, United States|||$80k-$85k/yr|||Onsite'
+15:34:47 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:34:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'General Manager|||Main Street Hospitality|||Newport, Rhode Island, United States|||$80k-$85k/yr|||Onsite' -> 'Houseperson|||Main Street Hospitality|||Newport, Rhode Island, United States|||$20/yr|||Onsite'
+15:34:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:34:55 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Houseperson|||Main Street Hospitality|||Newport, Rhode Island, United States|||$20/yr|||Onsite' -> 'Room Attendant|||Main Street Hospitality|||Newport, Rhode Island, United States|||$20/hr|||Onsite'
+15:34:56 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Main Street Hospitality' had more than 4 listings in this search
+15:34:56 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:34:56 [INFO   ] scraper.HiringCafeAdapter: Card 34: 'Production and Technical Manager' done.
+15:34:57 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Environmental Service Worker FT
+15:35:01 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:35:01 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:35:01 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Environmental Service Worker FT' @ 'Lubbock, Texas, United States'
+15:35:01 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:35:04 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Environmental Service Worker FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$15/hr|||Onsite' -> 'Service Coordinator FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$20/hr|||Field'
+15:35:05 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:35:09 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Service Coordinator FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$20/hr|||Field' -> 'MH MCOT Specialist FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$23-$25/hr|||Field'
+15:35:10 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:35:13 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'MH MCOT Specialist FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$23-$25/hr|||Field' -> 'Care Coordinator FT|||StarCare Specialty Health System|||Lubbock, Texas, United States|||$20-$22/hr|||Onsite'
+15:35:14 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'StarCare Specialty Health System' had more than 4 listings in this search
+15:35:14 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:35:14 [INFO   ] scraper.HiringCafeAdapter: Card 35: 'Environmental Service Worker FT' done.
+15:35:15 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Tool & Die Helper
+15:35:19 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:35:19 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:35:19 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Tool & Die Helper' @ 'Springfield, Ohio, United States'
+15:35:19 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:35:23 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Tool & Die Helper|||McGregor Metal|||Springfield, Ohio, United States|||$18/hr|||Onsite' -> 'CNC Operator|||McGregor Metal|||Springfield, Ohio, United States|||$20-$24/hr|||Onsite'
+15:35:24 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:35:27 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'CNC Operator|||McGregor Metal|||Springfield, Ohio, United States|||$20-$24/hr|||Onsite' -> 'Production Material Handler|||McGregor Metal|||Springfield, Ohio, United States|||$18-$20/hr|||Onsite'
+15:35:28 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:35:32 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Production Material Handler|||McGregor Metal|||Springfield, Ohio, United States|||$18-$20/hr|||Onsite' -> 'Tool & Die Technician|||McGregor Metal|||Springfield, Ohio, United States|||$22-$36/yr|||Onsite'
+15:35:33 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'McGregor Metal' had more than 4 listings in this search
+15:35:33 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:35:33 [INFO   ] scraper.HiringCafeAdapter: Card 36: 'Tool & Die Helper' done.
+15:35:34 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Drain Coordinator
+15:35:38 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:35:38 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:35:38 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Drain Coordinator' @ 'Farmington Hills, Michigan, United States'
+15:35:38 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:35:41 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Drain Coordinator|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time' -> 'Drain Performance Manager|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time'
+15:35:42 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:35:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Drain Performance Manager|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time' -> 'HVAC Service Technician|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time'
+15:35:47 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:35:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'HVAC Service Technician|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time' -> 'HVAC Lead Installer|||Thornton & Grooms|||Farmington Hills, Michigan, United States||||||Full Time'
+15:35:51 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Thornton & Grooms' had more than 4 listings in this search
+15:35:51 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:35:51 [INFO   ] scraper.HiringCafeAdapter: Card 37: 'Drain Coordinator' done.
+15:35:52 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Apartment Grounds Porter
+15:35:56 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:35:56 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:35:56 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Apartment Grounds Porter' @ 'New Port Richey, Florida, United States'
+15:35:56 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:35:59 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Apartment Grounds Porter|||Mahaffey Apartment Company|||New Port Richey, Florida, United States||||||Full Time' -> 'Apartment Leasing Consultant|||Mahaffey Apartment Company|||New Port Richey or Winter Haven||||||Full Time'
+15:36:00 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:36:04 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Apartment Leasing Consultant|||Mahaffey Apartment Company|||New Port Richey or Winter Haven||||||Full Time' -> 'Maintenance Tech III|||Mahaffey Apartment Company|||New Port Richey, Florida, United States||||||Full Time'
+15:36:05 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:36:37 [INFO   ] scraper.HiringCafeAdapter: Card metadata did not change after button click — no more listings to toggle through. Still: 'Apartment Grounds Porter' @ 'New Port Richey, Florida, United States'
+15:36:37 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 2 extra job(s) for this card.
+15:36:37 [INFO   ] scraper.HiringCafeAdapter: Card 38: 'Apartment Grounds Porter' done.
+15:36:38 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Assistant Director - Strategic Initiatives- Partnership Development
+15:36:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:36:42 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:36:42 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Assistant Director - Strategic Initiatives- Partnership Development' @ 'West Point, Georgia, United States'
+15:36:42 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:36:46 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #1: 'Assistant Director - Strategic Initiatives- Partnership Development|||Point University|||West Point, Georgia, United States||||||Full Time' -> 'Graduate Assistant - Sports Information|||Point University|||West Point, Georgia, United States||||||Contract'
+15:36:47 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 2)...
+15:36:50 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #2: 'Graduate Assistant - Sports Information|||Point University|||West Point, Georgia, United States||||||Contract' -> 'Assistant Coach - Football - Quarterbacks/Receivers|||Point University|||West Point, Georgia, United States||||||Full Time'
+15:36:51 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 3)...
+15:36:55 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle #3: 'Assistant Coach - Football - Quarterbacks/Receivers|||Point University|||West Point, Georgia, United States||||||Full Time' -> 'Admission Counselor|||Point University|||West Point, Georgia, United States||||||Full Time'
+15:36:56 [INFO   ] scraper.HiringCafeAdapter: HiringCafe: company 'Point University' had more than 4 listings in this search
+15:36:56 [INFO   ] scraper.HiringCafeAdapter: Finished multi-listing: found 3 extra job(s) for this card.
+15:36:56 [INFO   ] scraper.HiringCafeAdapter: Card 39: 'Assistant Director - Strategic Initiatives- Partnership Development' done.
+15:36:57 [INFO   ] scraper.HiringCafeAdapter: Opening details for: Psychiatric Technician
+15:37:01 [INFO   ] scraper.HiringCafeAdapter: Multi-listing toggle control found! HTML: <div class="flex items-center space-x-2"><button disabled="" class="bg-gray-200 md:bg-white/0 border md:border-none border-gray-300 p-2.5 md:p-0 text-black md:text-gray-400 rounded-full md:rounded-none opacity-80 md:opacity-100"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true" data-slot="icon" class="h-3 w-3 md:h-4 md:w-4 flex-none"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5 8.25 12l7.5-7.
+15:37:01 [INFO   ] scraper.HiringCafeAdapter: Multi-listing next button tag: button
+15:37:01 [INFO   ] scraper.HiringCafeAdapter: Starting multi-list toggle for card: 'Psychiatric Technician' @ 'Tulsa, Oklahoma, United States'
+15:37:01 [INFO   ] scraper.HiringCafeAdapter: Clicking multi-listing next button (iteration 1)...
+15:37:03 [INFO   ] scraper.HiringCafeAdapter: Card metadata did not change after button click — no more listings to toggle through. Still: 'Psychiatric Technician' @ 'Tulsa, Oklahoma, United States'
+15:37:03 [INFO   ] scraper.HiringCafeAdapter: Card 40: 'Psychiatric Technician' done.
+15:37:04 [INFO   ] scraper.HiringCafeAdapter: Processed all 40 cards on this page.
+15:37:04 [INFO   ] scraper.HiringCafeAdapter: Page 1: extracted 149 jobs.
+15:37:04 [INFO   ] scraper.HiringCafeAdapter: Checking for next page...
+15:37:04 [INFO   ] scraper.HiringCafeAdapter: Navigating to next page...
+15:37:09 [INFO   ] scraper.HiringCafeAdapter: Scraping complete. Total jobs: 149

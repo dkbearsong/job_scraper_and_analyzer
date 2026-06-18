@@ -4,14 +4,9 @@ from dotenv import load_dotenv
 import json
 from docx import Document
 import re
-import json
-from jobspy import scrape_jobs
-import csv
 import logging
-import random
 import time
 import numpy as np
-import itertools
 import yaml
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,6 +21,15 @@ from app.llm_classifier import (
     process_stage_6,
     process_stage_7,
     process_stage_8
+)
+
+# Scraper Adapter System
+from app.scrapers.adapter_loader import AdapterLoader
+from app.scrapers.validator import ScrapedDataValidator
+
+# Fallback Scraping Instructions (legacy Part A + Part B path)
+from app.fallback_scraping_instructions import (
+    _pipeline_stage_scrape_legacy,
 )
 
 
@@ -56,82 +60,6 @@ def load_resume_as_text(type):
     for para in doc.paragraphs:
         full_text.append(para.text.strip())
     return "\n".join(full_text)
-
-def scrape_single_job_board(new_data, company_url, company=""):
-    company_list = [] # list for all jobs in new_data
-    for item in new_data['data']:
-        if type(item) is not dict:
-            continue
-        if not item.get('title') or item['title'] == [None] or item['title'] == "":
-            continue
-        link = item.get('link')
-        if link and not link.startswith(("http","https")):
-            link = f"{company_url}{link}"
-        maker = {
-            "company": item['company'] if item.get('company') is not None else company,
-            "company_url": company_url,
-            "title": item['title'],
-            "flexibility": item['flexibility'] if item.get('flexibility') is not None else "NA",
-            "url": link,
-            "source":new_data['source'] if new_data.get('source') else ""
-            }
-        if item.get('location') is not None:
-            if re.search(r"location", item['location'], re.IGNORECASE):
-                item['location'] = re.sub(r'location', "", item['location'], flags=re.IGNORECASE)
-            maker["location"] = item['location']
-        company_list.append(maker)
-    return company_list
-
-def scrape_multi_job_board(new_data, company_url, company):
-    full_list = [] # list for all pages combined together
-    adjusted_nd = {
-        "data":[],
-        "status":200,
-        "success":True,
-        "source":new_data['source']
-    }
-    for item in new_data['data']:
-        adjusted_nd['data'].append(item['jobs'])
-    full_list += scrape_single_job_board(adjusted_nd, company_url, company)
-    return full_list
-
-async def scrape_sites(i, company_url, dp):
-    # print(f"Payload: {i}")
-    new_data = await dp.scrape_data(i['strategy'], api_method=i['api_method'])
-    new_data['source'] = i['strategy']['source']
-    if new_data['status_code'] != 200:
-        print(f"Scraping data failed. Error code {new_data['status_code']}. Error: {new_data['error'] if new_data.get('error') is not None else 'No error message provided.'}")
-        return
-    if 'data' not in new_data:
-        print(f"Warning: No 'data' key in response from {i['company']}. Response: {new_data}")
-        return
-    if len(new_data['data']) != 0:
-        try:
-            maker = scrape_multi_job_board(new_data, company_url, i['company']) if new_data['data'][0].get('jobs') is not None else scrape_single_job_board(new_data, company_url, i['company'])
-        except (KeyError, IndexError, TypeError) as e:
-            print(f"Error: {e}\nNew Data: {new_data}")
-    else:
-        return
-    return maker
-
-def scrape_jb(sn, l, rw, ho, **kwargs):
-    allowed_keys = {
-        "linkedin_fetch_description", 
-        "country_indeed", 
-        "google_search_term", 
-        "search_term"
-    }
-
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k in allowed_keys}
-    
-    jobs = scrape_jobs(
-        site_name=[sn],
-        location=l,
-        results_wanted=rw,
-        hours_old=ho,
-        **filtered_kwargs
-    )
-    return jobs
 
 def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
     """
@@ -391,160 +319,17 @@ async def pipeline_stage_setup(skip_db: bool = False, verbose: bool = False,
 # PIPELINE STAGE 1: SCRAPING
 # =====================================================
 
-async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
-                                verbose: bool = False) -> List[Dict]:
+def _normalize_to_pool_format(all_scraped: List[Dict]) -> List[Dict]:
     """
-    Stage 1: Scrape jobs from company career pages and job boards.
+    Convert a list of raw scraped job dicts into the processed_job_pool format
+    expected by downstream pipeline stages.
     
     Args:
-        setup_data: Output from pipeline_stage_setup.
-        skip_db: If True, skip database persistence.
-        verbose: If True, print detailed debug output.
+        all_scraped: List of raw job dicts from adapters (must have 'title' key).
     
     Returns:
-        List[Dict] of scraped jobs in the 'processed_job_pool' format.
+        List[Dict] in the processed_job_pool format.
     """
-    dp = setup_data["dp"]
-    tp = setup_data["tp"]
-    user_preferences = setup_data.get("user_preferences", {})
-    sites = setup_data.get("sites", {"name": [], "site": []})
-
-    print("=" * 50)
-    print("PIPELINE STAGE 1: SCRAPING")
-    print("=" * 50)
-
-    # ==========================================
-    # PART A: Scrape from company career pages
-    # ==========================================
-    print("--- Company Board Scraping ---")
-    site_strategies = []
-    data = []
-
-    for i in range(len(sites.get('name', []))):
-        strategy_path = f"./site_strategies/{sites['name'][i]}.json"
-        if not os.path.exists(strategy_path):
-            print(f"Warning: strategy file not found: {strategy_path}")
-            continue
-        strategy = {
-            "company": sites['name'][i],
-            "site": sites['site'][i],
-            "strategy": dp.load_site_strategies(strategy_path),
-            "api_method": "",
-        }
-        strat = strategy['strategy']
-        strategy['api_method'] = (
-            "extract-paginated" if strat.get('pagination') is not None
-            else ("extract-js" if strat.get("js_config") is not None else "extract")
-        )
-        if verbose:
-            print(f"Company: {strategy['company']} | API method: {strategy['api_method']}")
-        site_strategies.append(strategy)
-    print(f"Loaded {len(site_strategies)} site strategies.")
-
-    for i in site_strategies:
-        company_url = i['strategy'].pop('company_url', None)
-        print(f"Scraping {i['company']}...")
-        if isinstance(i['strategy']['url'], str):
-            d = await scrape_sites(i, company_url, dp)
-            if not d:
-                continue
-            if isinstance(d, list):
-                data += d
-            else:
-                data.append(d)
-        elif isinstance(i['strategy']['url'], list):
-            for j in i['strategy']['url']:
-                new_payload = i
-                new_payload['strategy']['url'] = j
-                d = await scrape_sites(new_payload, company_url, dp)
-                if not d:
-                    continue
-                if isinstance(d, list):
-                    data += d
-                else:
-                    data.append(d)
-    print(f"Total jobs scraped from company boards: {len(data)}")
-
-    if not skip_db:
-        dp.load_scraped_data_to_db(data)
-
-    # ==========================================
-    # PART B: Scrape from job boards (Indeed, LinkedIn, etc.)
-    # ==========================================
-    print("--- Job Board Scraping ---")
-    job_board_list = ["indeed", "linkedin", "zip_recruiter", "google"]
-
-    search_terms_file = os.getenv("SEARCH_TERMS", "")
-    search_terms = []
-    if search_terms_file and os.path.exists(search_terms_file):
-        try:
-            with open(search_terms_file, mode='r', encoding='utf-8') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if row:
-                        search_terms.append(row[0])
-        except Exception as e:
-            error_logger_continue(f"Failed to load search terms: {e}")
-    if not search_terms:
-        print("Warning: No search terms found. Using default.")
-        search_terms = ["Software Engineer"]
-
-    target_cities = user_preferences.get('target_cities', [])
-    if not target_cities:
-        target_cities = ["Remote"]
-
-    jobs = []
-    requests_wanted = 200
-    delay = {"min": 1, "max": 4}
-
-    for board, st, location in itertools.product(job_board_list, search_terms, target_cities):
-        kwa = {}
-        if board == "google":
-            kwa["google_search_term"] = st
-        elif board == "indeed":
-            kwa["search_term"] = st
-            kwa["country_indeed"] = "USA"
-        elif board == "linkedin":
-            kwa["search_term"] = st
-            kwa["linkedin_fetch_description"] = True
-        else:
-            kwa["search_term"] = st
-
-        try:
-            for i in scrape_jb(board, location, requests_wanted, 24, **kwa):
-                if isinstance(i, dict):
-                    job = {
-                        "source": i.get('site'),
-                        "title": i.get('title'),
-                        "url": i.get('job_url'),
-                        "link": i.get('job_url'),
-                        "company": i.get('company'),
-                        "pay": f"{i.get('min_amount', '')} - {i.get('max_amount', '')} {i.get('interval', '')}".strip(),
-                        "description": i.get('description'),
-                        "city": i.get('city'),
-                        "state": i.get('state'),
-                        "flexibility": i.get('work_type', "NA"),
-                        "location": i.get('location', ''),
-                    }
-                else:
-                    job = {
-                        "source": None, "title": None, "url": None, "link": None,
-                        "company": None, "pay": "", "description": None,
-                        "city": None, "state": None, "flexibility": "NA", "location": ""
-                    }
-                jobs.append(job)
-        except Exception as e:
-            error_logger_continue(f"Job board scrape failed for {board}/{st}/{location}: {e}")
-
-        time.sleep(random.uniform(delay['min'], delay['max']))
-
-    print(f"Total jobs scraped from job boards: {len(jobs)}")
-
-    if not skip_db:
-        dp.load_scraped_data_to_db(jobs)
-
-    # Merge and convert to processed_job_pool format
-    all_scraped = data + jobs
     processed_job_pool = []
     seen_ids = set()
     for idx, item in enumerate(all_scraped):
@@ -572,6 +357,102 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
                 "skills_vector": None,
             },
         })
+    return processed_job_pool
+
+
+def _check_run_fallback_flag(config_path: str) -> bool:
+    """
+    Check the top-level 'run_fallback_after_adapters' flag in the scrapers config YAML.
+    
+    Args:
+        config_path: Path to the scrapers_config.yaml file.
+    
+    Returns:
+        True if the flag is set to True, False otherwise.
+    """
+    if not os.path.exists(config_path):
+        return False
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f) or {}
+        return config.get("run_fallback_after_adapters", False)
+    except Exception as e:
+        print(f"Warning: Could not read 'run_fallback_after_adapters' from {config_path}: {e}")
+        return False
+
+
+async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
+                                verbose: bool = False) -> List[Dict]:
+    """
+    Stage 1: Scrape jobs using the pluggable adapter system.
+
+    Attempts to load scrapers from scrapers_config.yaml. If the config file
+    is not found or contains no enabled adapters, falls back to the legacy
+    hardcoded scraping path for backward compatibility.
+
+    Args:
+        setup_data: Output from pipeline_stage_setup.
+        skip_db: If True, skip database persistence.
+        verbose: If True, print detailed debug output.
+
+    Returns:
+        List[Dict] of scraped jobs in the 'processed_job_pool' format.
+    """
+    dp = setup_data["dp"]
+    tp = setup_data["tp"]
+    user_preferences = setup_data.get("user_preferences", {})
+    sites = setup_data.get("sites", {"name": [], "site": []})
+
+    print("=" * 50)
+    print("PIPELINE STAGE 1: SCRAPING")
+    print("=" * 50)
+
+    # Determine config path (check env var first, then default)
+    scrapers_config_path = os.getenv("SCRAPERS_CONFIG", "scrapers_config.yaml")
+
+    # ── Attempt adapter-based scraping ──
+    all_scraped: List[Dict] = []
+    used_adapters = False
+
+    if os.path.exists(scrapers_config_path):
+        try:
+            loader = AdapterLoader(config_path=scrapers_config_path, verbose=verbose)
+            loader.load_config()
+            adapter_list = loader.load_adapters()
+
+            if adapter_list:
+                used_adapters = True
+                print(f"Loaded {len(adapter_list)} adapter(s) from {scrapers_config_path}")
+                all_scraped = await loader.run_all(dp=dp)
+
+                # Persist raw scraped data to DB
+                if not skip_db and all_scraped:
+                    dp.load_scraped_data_to_db(all_scraped)
+            else:
+                print(f"Config found at {scrapers_config_path} but no enabled adapters loaded.")
+        except Exception as e:
+            print(f"Adapter system failed: {e}. Falling back to legacy scraping.")
+
+    # ── Fallback to legacy path if adapters didn't run ──
+    if not used_adapters:
+        all_scraped = await _pipeline_stage_scrape_legacy(
+            dp, user_preferences, sites, skip_db, verbose
+        )
+
+    # ── Also run fallback if explicitly configured to do so ──
+    if used_adapters and _check_run_fallback_flag(scrapers_config_path):
+        print("run_fallback_after_adapters is True — also running legacy fallback scraping...")
+        fallback_jobs = await _pipeline_stage_scrape_legacy(
+            dp, user_preferences, sites, skip_db, verbose
+        )
+        if fallback_jobs:
+            print(f"Merging {len(fallback_jobs)} fallback jobs with {len(all_scraped)} adapter jobs.")
+            all_scraped.extend(fallback_jobs)
+        else:
+            print("Fallback scraping returned no jobs.")
+
+    # ── Convert raw scraped data to processed_job_pool format ──
+    processed_job_pool = _normalize_to_pool_format(all_scraped)
 
     # If no jobs were scraped (e.g., in test mode), use dummy data as fallback
     if not processed_job_pool:

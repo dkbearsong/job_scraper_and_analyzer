@@ -9,7 +9,7 @@ The system processes jobs through **9 stages**, each building on the previous:
 | Stage | Name | What It Does |
 |-------|------|--------------|
 | 0 | **Setup** | Loads `.env`, reads resume + user profile from `documents/`, creates AI engine, extracts skills/job titles via text processing |
-| 1 | **Scrape** | Scrapes jobs from configured company career pages (using `site_strategies/` files) and major job boards (Indeed, LinkedIn, ZipRecruiter, Google) |
+| 1 | **Scrape** | Scrapes jobs via the pluggable adapter system (configured by `scrapers_config.yaml`). Falls back to legacy Part A (company career pages via `site_strategies/`) + Part B (job boards via JobSpy) if no config file is found. |
 | 2 | **Embed + Extract** | Runs deterministic extraction (salary, seniority, work type, timezone), LLM extraction (skills, requirements, summary), and generates embedding vectors for title, skills, requirements, and description |
 | 3 | **Rule Filter** | Applies hard-constraint rules from `user_preferences.yaml` (work type, seniority level, pay range, timezone) — jobs that fail are skipped |
 | 4 | **Archetype Integration** | Loads benchmark archetypes from `archetypes_config.json` plus your Resume and User Profile as archetypes, generating embeddings for each |
@@ -23,24 +23,34 @@ The system processes jobs through **9 stages**, each building on the previous:
 ```
 .
 ├── main.py                          # Pipeline orchestrator + entry point
+├── scrapers_config.yaml             # Pluggable scraper adapter configuration
 ├── .env                             # Configuration (paths, API keys, LLM settings)
 ├── user_preferences.yaml            # Rule filtering preferences
 ├── app/
 │   ├── ai_engine.py                 # AI/LLM interface (extraction, embeddings)
 │   ├── archetype_engine.py          # Archetype management and comparison
+│   ├── fallback_scraping_instructions.py  # Legacy Part A + Part B scraping (fallback path)
 │   ├── llm_classifier.py            # Cheap LLM + Strong LLM classification stages
 │   ├── make_db.py                   # Database schema creation
 │   ├── postgres_mgr.py              # PostgreSQL database manager
 │   ├── pull_data.py                 # Site scraping (DataPuller)
 │   ├── text_engine.py               # Text processing and deterministic extraction
 │   ├── tui.py                       # Textual-based Terminal UI
-│   └── vector_engine.py             # Vector operations, scoring adjustments
+│   ├── vector_engine.py             # Vector operations, scoring adjustments
+│   └── scrapers/
+│       ├── __init__.py              # ScraperAdapter ABC, JobData schema, validator
+│       ├── adapter_loader.py        # AdapterLoader: reads YAML, imports + runs adapters
+│       ├── validator.py             # ScrapedDataValidator: validates job data schema
+│       ├── jobspy_adapter.py        # Built-in adapter for JobSpy library
+│       ├── microservice_adapter.py  # Built-in adapter for local scraping microservice
+│       ├── http_adapter.py          # Built-in adapter for HTTP/API endpoints
+│       └── hiring_cafe_adapter.py   # Built-in adapter for hiring.cafe
 ├── documents/
 │   ├── Your Name Resume.docx        # Your resume (Word format)
 │   ├── User Profile - YourName.txt  # Your skills/profile (plain text)
 │   └── archetypes_config.json       # Benchmark archetype definitions
 ├── site_strategies/
-│   └── <company_name>.json          # Per-company scraping strategies
+│   └── <company_name>.json          # Per-company scraping strategies (legacy Part A)
 └── archetype_profiles/
     ├── resume_cache.json            # Cached resume data (auto-generated)
     ├── user_profile_cache.json      # Cached profile data (auto-generated)
@@ -115,6 +125,10 @@ ARCHETYPES_CONFIG='./documents/archetypes_config.json'
 
 USER_PREFERENCES_YAML='./user_preferences.yaml'
 # Path to the YAML file containing rule-based filtering preferences.
+
+SCRAPERS_CONFIG='scrapers_config.yaml'
+# Path to the scraper adapter configuration YAML file.
+# Controls which scrapers run during Stage 1.
 
 # ──────────────────────────────────────────────
 # API KEYS
@@ -241,9 +255,115 @@ pay_range: "$95k-200k"
 
 **How filtering works:** If a field is set, only jobs matching one of the listed values pass through. Leave a list empty or unset to allow all values for that field. If pay is "Not Specified" for a job, it passes through without comparison.
 
-### 4. Site Strategies (Company Career Page Scraping)
+### 4. Configure `scrapers_config.yaml`
 
-To scrape jobs from specific company career pages, create a `site_strategies/` directory and add a JSON file for each company. The filename (without `.json`) must match an entry in the `JOB_SITES` list.
+This file controls all scraping during **Stage 1**. It defines a list of adapter entries, each specifying a source to scrape from. If this file is not present, the pipeline falls back to the legacy hardcoded scraping path (Part A: `site_strategies/` + Part B: JobSpy job boards).
+
+**Full config reference (`scrapers_config.yaml`):**
+
+```yaml
+# Scrapers Configuration
+# =====================
+# Each entry defines a scraper adapter to run during Pipeline Stage 1.
+#
+# Fields:
+#   name:     Unique identifier for this scraper source
+#   adapter:  Dotted Python module path OR built-in short name:
+#               - "JobSpyAdapter"       Built-in: job boards via JobSpy
+#               - "MicroserviceAdapter"  Built-in: company career page microservice
+#               - "HttpAdapter"          Built-in: HTTP/API endpoint
+#               - "my_module.MyClass"   Custom adapter (must subclass ScraperAdapter)
+#   enabled:  true/false (default: true)
+#   config:   Adapter-specific configuration (see each adapter's docs)
+#
+# Environment variables can be referenced as ${VAR_NAME} in config values.
+
+scrapers:
+  # ── Company Career Pages via Local Microservice ──
+  - name: microservice_company_boards
+    adapter: MicroserviceAdapter
+    enabled: true
+    config:
+      sites_file: "${JOB_SITES}"
+      strategies_dir: "./site_strategies"
+      microservice_host: "http://localhost"
+      microservice_port: "5052"
+      timeout: 120
+      delay_min: 1
+      delay_max: 3
+
+  # ── Job Boards via JobSpy (Indeed, LinkedIn, ZipRecruiter, Google) ──
+  - name: jobspy_boards
+    adapter: JobSpyAdapter
+    enabled: true
+    config:
+      boards:
+        - indeed
+        - linkedin
+        - zip_recruiter
+        - google
+      search_terms:
+        - Software Engineer
+      target_cities:
+        - Remote
+      requests_wanted: 200
+      hours_old: 24
+      delay_min: 1
+      delay_max: 4
+      country_indeed: "USA"
+
+  # ── HTTP/API Endpoint (example) ──
+  # - name: my_remote_scraper
+  #   adapter: HttpAdapter
+  #   enabled: false
+  #   config:
+  #     url: "https://my-scraper-service.com/api/scrape"
+  #     method: POST
+  #     timeout: 120
+  #     headers:
+  #       Authorization: "Bearer ${MY_API_TOKEN}"
+
+  # ── HiringCafe (live browser-based scraper) ──
+  - name: hiring_cafe
+    adapter: app.scrapers.hiring_cafe_adapter.HiringCafeAdapter
+    enabled: true
+    config:
+      max_pages: 5
+      headless: false
+```
+
+**Adapter-specific `config` reference:**
+
+| Adapter | Config Key | Type | Default | Description |
+|---------|-----------|------|---------|-------------|
+| **MicroserviceAdapter** | `sites_file` | str | `""` | Path to CSV file listing company names + URLs |
+| | `strategies_dir` | str | `"./site_strategies"` | Directory containing site strategy JSON files |
+| | `microservice_host` | str | `"http://localhost"` | Microservice host |
+| | `microservice_port` | str | `"5052"` | Microservice port |
+| | `timeout` | int | `120` | Request timeout (seconds) |
+| | `delay_min` | float | `1.0` | Min delay between requests |
+| | `delay_max` | float | `3.0` | Max delay between requests |
+| **JobSpyAdapter** | `boards` | list | `["indeed"]` | Job boards to scrape (indeed, linkedin, zip_recruiter, google) |
+| | `search_terms` | list | `["Software Engineer"]` | Search terms/queries |
+| | `target_cities` | list | `["Remote"]` | Cities to search in |
+| | `requests_wanted` | int | `200` | Results per board/search |
+| | `hours_old` | int | `24` | Filter: listings within N hours |
+| | `delay_min` / `delay_max` | float | `1` / `4` | Rate limiting delay range |
+| | `country_indeed` | str | `"USA"` | Country for Indeed searches |
+| **HttpAdapter** | `url` | str | *(required)* | Endpoint URL |
+| | `method` | str | `"POST"` | HTTP method (GET or POST) |
+| | `headers` | dict | `{}` | Custom HTTP headers |
+| | `timeout` | int | `120` | Request timeout |
+| | `payloads` | list | `[]` | Optional request payloads (one request each) |
+| | `payloads_file` | str | `""` | JSON file containing payloads |
+| | `auth_header` | str | `""` | Authorization header value |
+| | `delay_min` / `delay_max` | float | `1` / `3` | Rate limiting delay |
+| **HiringCafeAdapter** | `max_pages` | int | `5` | Max pages to scrape |
+| | `headless` | bool | `false` | Run browser in headless mode |
+
+### 5. Site Strategies (Company Career Page Scraping)
+
+To scrape jobs from specific company career pages (legacy Part A or MicroserviceAdapter), create a `site_strategies/` directory and add a JSON file for each company. The filename (without `.json`) must match an entry in the `JOB_SITES` list.
 
 **Example `site_strategies/example_company.json`:**
 
@@ -275,11 +395,11 @@ To scrape jobs from specific company career pages, create a `site_strategies/` d
 | `js_config` | (Optional) If present, the scraper uses `extract-js` method (browser rendering) |
 
 **Loading strategies:**
-1. Add company entries to `sites` list in the `DataPuller`'s JOB_SITES file
+1. Add company entries to `sites` list in the `DataPuller`'s JOB_SITES file (legacy) or configure `MicroserviceAdapter` in `scrapers_config.yaml`
 2. Create a corresponding `site_strategies/<company_name>.json` file
 3. The pipeline automatically loads and applies these strategies during Stage 1
 
-### 5. Search Terms for Job Boards (Optional)
+### 6. Search Terms for Job Boards (Optional)
 
 If you want to control which job titles/roles are searched on Indeed, LinkedIn, etc., create a CSV file (e.g., `search_terms.csv`) and set `SEARCH_TERMS` in `.env`:
 
@@ -291,6 +411,115 @@ DevOps Engineer
 ```
 
 If left unset, the pipeline defaults to `["Software Engineer"]`.
+
+## Writing a Custom Scraper Adapter
+
+You can extend the pipeline by writing a custom scraper adapter and registering it in `scrapers_config.yaml`. The adapter system dynamically imports, configures, and runs any class that subclasses `ScraperAdapter`.
+
+### Required Interface
+
+Every adapter must subclass `ScraperAdapter` (defined in `app/scrapers/__init__.py`) and implement these three methods:
+
+```python
+from typing import Any, Dict, List
+from app.scrapers import ScraperAdapter
+
+class MyCustomAdapter(ScraperAdapter):
+    def get_name(self) -> str:
+        """
+        Return a human-readable name for this adapter (used in logs).
+        The name from scrapers_config.yaml is injected automatically.
+        """
+        return self._config.get("name", "my_custom_adapter")
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        """
+        Accept adapter-specific configuration from scrapers_config.yaml.
+        Store whatever settings your adapter needs.
+        """
+        self._config = config
+        # Example: self._api_key = config.get("api_key", "")
+        #          self._max_results = config.get("max_results", 100)
+
+    async def scrape(self) -> List[Dict[str, Any]]:
+        """
+        Execute the scraping operation.
+        
+        Returns:
+            List of job dicts conforming to the JobData schema.
+            Each dict must at minimum contain 'title' and 'company' keys.
+        """
+        # Your scraping logic here
+        jobs = []
+        # ...
+        return jobs
+```
+
+### Job Data Schema
+
+Your adapter's `scrape()` method must return a list of dicts conforming to this schema:
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `title` | **Yes** | str | Job title |
+| `company` | **Yes** | str | Company name |
+| `source` | No | str | Origin identifier (e.g. "indeed", "custom_api") |
+| `url` | No | str or None | Job listing URL |
+| `link` | No | str or None | Alias for url (backward compat) |
+| `flexibility` | No | str or None | Work type: "remote", "hybrid", "onsite", "NA" |
+| `pay` | No | str or None | Pay range (e.g. "$80k-$120k") |
+| `location` | No | str or None | Full location (e.g. "Austin, TX") |
+| `description` | No | str or None | Job description text |
+| `city` | No | str or None | City name |
+| `state` | No | str or None | State abbreviation |
+| `company_url` | No | str or None | Company career page URL |
+
+### Registering in `scrapers_config.yaml`
+
+Add an entry under `scrapers:` with the dotted module path to your adapter class:
+
+```yaml
+scrapers:
+  - name: my_custom_source
+    adapter: my_package.scrapers.MyCustomAdapter
+    enabled: true
+    config:
+      api_key: "${MY_API_KEY}"
+      max_results: 100
+      # any other adapter-specific settings
+```
+
+Configuration values support `${ENV_VAR}` syntax for referencing environment variables. The `name` field is automatically injected into the config dict so `get_name()` can access it.
+
+### Reference Example
+
+Here is the `HiringCafeAdapter` (from `app/scrapers/hiring_cafe_adapter.py`) as a complete working example:
+
+```python
+from typing import Any, Dict, List
+from app.scrapers import ScraperAdapter
+
+class HiringCafeAdapter(ScraperAdapter):
+    def get_name(self) -> str:
+        return self._config.get("name", "hiring_cafe")
+
+    def configure(self, config: Dict[str, Any]) -> None:
+        self._config = config
+        self._max_pages = config.get("max_pages", 5)
+        self._headless = config.get("headless", False)
+
+    async def scrape(self) -> List[Dict[str, Any]]:
+        # ... implementation returns List[Dict] with title, company, etc.
+        pass
+```
+
+### Fallback Path
+
+If `scrapers_config.yaml` is not found or contains no enabled adapters, the pipeline falls back to the legacy scraping logic in `app/fallback_scraping_instructions.py`. This legacy path runs:
+- **Part A:** Company career pages using `site_strategies/` JSON files via a local microservice
+- **Part B:** Job boards (Indeed, LinkedIn, ZipRecruiter, Google) via the JobSpy library
+
+To migrate from the legacy path to the adapter system, simply create `scrapers_config.yaml` with the appropriate adapter entries.
 
 ## Running the Application
 

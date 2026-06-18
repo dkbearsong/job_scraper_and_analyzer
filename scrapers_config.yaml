@@ -1,0 +1,60 @@
+# Scrapers Configuration
+# =====================
+# Each entry defines a scraper adapter to run during Pipeline Stage 1.
+#
+# Top-level fields:
+#   run_fallback_after_adapters:  (default: false) If true, also run the legacy
+#                                 fallback scraping path (Part A: company career
+#                                 pages + Part B: job boards via JobSpy) *after*
+#                                 all enabled adapters have completed, and merge
+#                                 the results together.
+#
+# Per-adapter fields:
+#   name:     Unique identifier for this scraper source
+#   adapter:  Dotted Python module path OR built-in short name:
+#               - "JobSpyAdapter"      → app.scrapers.jobspy_adapter.JobSpyAdapter
+#               - "MicroserviceAdapter" → app.scrapers.microservice_adapter.MicroserviceAdapter
+#               - "HttpAdapter"         → app.scrapers.http_adapter.HttpAdapter
+#               - "my_module.MyClass"   → Custom adapter (must subclass ScraperAdapter)
+#   enabled:  true/false (default: true)
+#   config:   Adapter-specific configuration (see each adapter's docs)
+#
+# Environment variables can be referenced as ${VAR_NAME} in config values.
+
+run_fallback_after_adapters: true
+
+scrapers:
+  # ─────────────────────────────────────────────────────
+  # Example: HTTP/API Endpoint
+  # Uncomment and configure to use a remote scraper API
+  # ─────────────────────────────────────────────────────
+  # - name: my_remote_scraper
+  #   adapter: HttpAdapter
+  #   enabled: false
+  #   config:
+  #     url: "https://my-scraper-service.com/api/scrape"
+  #     method: POST
+  #     timeout: 120
+  #     headers:
+  #       Authorization: "Bearer ${MY_API_TOKEN}"
+
+  # ─────────────────────────────────────────────────────
+  # HiringCafe: Live browser-based scraper for hiring.cafe
+  # ─────────────────────────────────────────────────────
+  - name: hiring_cafe
+    adapter: app.scrapers.hiring_cafe_adapter.HiringCafeAdapter
+    enabled: true
+    config:
+      max_pages: 5
+      headless: false
+
+
+  # Example: Custom Python Module Adapter
+  # Uncomment and point to your custom adapter class
+  # ─────────────────────────────────────────────────────
+  # - name: custom_scraper
+  #   adapter: my_custom_lib.scrapers.MyCustomAdapter
+  #   enabled: false
+  #   config:
+  #     api_key: "${CUSTOM_API_KEY}"
+  #     max_results: 500
