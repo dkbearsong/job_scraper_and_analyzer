@@ -41,12 +41,13 @@ scrapers:
   # ─────────────────────────────────────────────────────
   # HiringCafe: Live browser-based scraper for hiring.cafe
   # ─────────────────────────────────────────────────────
-  - name: hiring_cafe
-    adapter: app.scrapers.hiring_cafe_adapter.HiringCafeAdapter
-    enabled: true
-    config:
-      max_pages: 5
-      headless: false
+  # - name: hiring_cafe
+  #   adapter: app.scrapers.hiring_cafe_adapter.HiringCafeAdapter
+  #   enabled: true
+  #   config:
+  #     max_pages: 2
+  #     headless: false
+  #     urls_csv: "${HIRING_CAFE_URLS_CSV}"
 
 
   # Example: Custom Python Module Adapter
@@ -58,3 +59,7 @@ scrapers:
   #   config:
   #     api_key: "${CUSTOM_API_KEY}"
   #     max_results: 500
+
+- name: Adzuna
+  adapter: app.scrapers.adzuna_adapter.AdzunaAdapter
+  enabled: true

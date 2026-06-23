@@ -17,6 +17,8 @@ from anthropic import Anthropic
 import google.genai as genai
 from google.genai import types
 
+# LLM Usage Tracking
+from app.llm_usage_tracker import usage_tracker
 
 # =====================================================
 # STAGE 6: CHEAP LLM CLASSIFICATION PROMPTS
@@ -139,25 +141,29 @@ class CheapLLMClassifier:
     Recommended: Gemini Flash-Lite, DeepSeek V3, or local models.
     """
     
-    def __init__(self, provider: str = "gemini"):
+    def __init__(self, provider: str = "gemini", model: str | None = None):
         self.provider = provider
+        self.model = model
         self._init_client()
     
     def _init_client(self):
         if self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             self.client = genai.Client(api_key=api_key)
-            self.model = os.getenv("CHEAP_LLM_MODEL", "gemini-2.0-flash-lite")
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "gemini-2.0-flash-lite")
         elif self.provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             self.client = OpenAI(api_key=api_key)
-            self.model = os.getenv("CHEAP_LLM_MODEL", "gpt-4o-mini")
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "gpt-4o-mini")
         elif self.provider == "lm_studio":
             self.client = OpenAI(base_url=f"{os.getenv('LMS_URL', 'http://localhost')}:{os.getenv('LMS_PORT', '1234')}/v1", api_key=os.getenv("LMS_API_KEY", "lm-studio"))
-            self.model = os.getenv("CHEAP_LLM_MODEL", "local-model")
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "local-model")
+        elif self.provider == "openrouter":
+            self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPENROUTER_API_KEY"))
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "google/gemini-2.0-flash-lite")
         elif self.provider == "ollama":
             self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
-            self.model = os.getenv("CHEAP_LLM_MODEL", "llama3")
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "llama3")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -192,8 +198,13 @@ class CheapLLMClassifier:
                         response_mime_type="application/json"
                     )
                 )
+                usage_tracker.record_from_response(
+                    provider=self.provider, model=self.model or "unknown",
+                    operation="classification", response=response,
+                    context=f"cheap_llm: {job_title}"
+                )
                 content = response.text
-            elif self.provider in ("openai", "lm_studio", "ollama"):
+            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
@@ -202,6 +213,11 @@ class CheapLLMClassifier:
                     ],
                     temperature=0.1,
                     response_format={"type": "json_object"}
+                )
+                usage_tracker.record_from_response(
+                    provider=self.provider, model=self.model or "unknown",
+                    operation="classification", response=response,
+                    context=f"cheap_llm: {job_title}"
                 )
                 content = response.choices[0].message.content
             else:
@@ -244,29 +260,33 @@ class StrongLLMReranker:
     Recommended: DeepSeek V3, GPT-4, Claude Opus.
     """
     
-    def __init__(self, provider: str = "claude"):
+    def __init__(self, provider: str = "claude", model: str | None = None):
         self.provider = provider
+        self.model = model
         self._init_client()
     
     def _init_client(self):
         if self.provider == "claude":
             api_key = os.getenv("ANTHROPIC_API_KEY")
             self.client = Anthropic(api_key=api_key)
-            self.model = os.getenv("STRONG_LLM_MODEL", "claude-3-5-sonnet-20241022")
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "claude-3-5-sonnet-20241022")
         elif self.provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             self.client = OpenAI(api_key=api_key)
-            self.model = os.getenv("STRONG_LLM_MODEL", "gpt-4o")
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "gpt-4o")
         elif self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             self.client = genai.Client(api_key=api_key)
-            self.model = os.getenv("STRONG_LLM_MODEL", "gemini-2.0-flash-exp")
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "gemini-2.0-flash-exp")
         elif self.provider == "lm_studio":
             self.client = OpenAI(base_url=f"{os.getenv('LMS_URL', 'http://localhost')}:{os.getenv('LMS_PORT', '1234')}/v1", api_key=os.getenv("LMS_API_KEY", "lm-studio"))
-            self.model = os.getenv("STRONG_LLM_MODEL", "local-model")
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "local-model")
+        elif self.provider == "openrouter":
+            self.client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=os.getenv("OPENROUTER_API_KEY"))
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "openai/gpt-4o")
         elif self.provider == "ollama":
             self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
-            self.model = os.getenv("STRONG_LLM_MODEL", "llama3")
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "llama3")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -316,6 +336,11 @@ class StrongLLMReranker:
                     system=STRONG_LLM_SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}]
                 )
+                usage_tracker.record_from_response(
+                    provider=self.provider, model=self.model or "unknown",
+                    operation="reranking", response=response,
+                    context=f"strong_llm: {job_title}"
+                )
                 content = response.content
                 if isinstance(content, list) and content:
                     first_block = content[0]
@@ -324,7 +349,7 @@ class StrongLLMReranker:
                         content = getattr(first_block, "output_text", None)
                     if content is None:
                         content = str(first_block)
-            elif self.provider in ("openai", "lm_studio", "ollama"):
+            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
@@ -333,6 +358,11 @@ class StrongLLMReranker:
                     ],
                     temperature=0.1,
                     response_format={"type": "json_object"}
+                )
+                usage_tracker.record_from_response(
+                    provider=self.provider, model=self.model or "unknown",
+                    operation="reranking", response=response,
+                    context=f"strong_llm: {job_title}"
                 )
                 content = response.choices[0].message.content
             elif self.provider == "gemini":
@@ -343,6 +373,11 @@ class StrongLLMReranker:
                         temperature=0.1,
                         response_mime_type="application/json"
                     )
+                )
+                usage_tracker.record_from_response(
+                    provider=self.provider, model=self.model or "unknown",
+                    operation="reranking", response=response,
+                    context=f"strong_llm: {job_title}"
                 )
                 content = response.text
             else:

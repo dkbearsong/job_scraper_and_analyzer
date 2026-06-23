@@ -119,7 +119,7 @@ async def run_stage_0(input_data: dict, **kwargs) -> dict:
     return result
 
 
-async def run_stage_1(input_data: dict, **kwargs) -> List[Dict]:
+async def run_stage_1(input_data: Any, **kwargs) -> List[Dict]:
     """Run Stage 1: Scraping."""
     skip_db = kwargs.get("skip_db", False)
     verbose = kwargs.get("verbose", False)
@@ -307,7 +307,7 @@ def get_input_for_stage(stage: int, previous_output: Any, dummy: bool) -> Any:
     return previous_output
 
 
-def build_argument_pack(stage: int, setup_data: dict, use_dummy: bool,
+def build_argument_pack(stage: int, setup_data: Optional[Dict[str, Any]], use_dummy: bool,
                         skip_db: bool, verbose: bool, ai_engine=None) -> dict:
     """Build the kwargs dict for a stage runner."""
     args = {
@@ -543,12 +543,31 @@ async def main():
 
 if __name__ == "__main__":
     import sys
+    import importlib
+    import importlib.util
 
     # Check for TUI mode
     if "--tui" in sys.argv or "-t" in sys.argv:
         # Remove the tui flag so argparse doesn't choke on it
         sys.argv = [a for a in sys.argv if a not in ("--tui", "-t")]
-        from tests.test_tui import run_test_tui
+
+        run_test_tui = None
+        try:
+            test_tui = importlib.import_module("tests.test_tui")
+            run_test_tui = getattr(test_tui, "run_test_tui", None)
+        except (ModuleNotFoundError, ImportError):
+            tui_path = os.path.join(os.path.dirname(__file__), "test_tui.py")
+            if os.path.exists(tui_path):
+                spec = importlib.util.spec_from_file_location("tests.test_tui", tui_path)
+                if spec and spec.loader:
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    run_test_tui = getattr(module, "run_test_tui", None)
+
+        if run_test_tui is None:
+            print("Error: TUI module not found. Please ensure 'tests/test_tui.py' exists.")
+            sys.exit(1)
+
         run_test_tui()
     else:
         asyncio.run(main())

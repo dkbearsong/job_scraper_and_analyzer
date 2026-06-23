@@ -2,15 +2,20 @@
 .env
 codereview.md
 main.py.backup
+job_sites.csv
+scrapers_config.yaml
 user_preferences.yaml
+test_llm_classifier.py
 
 # Folders
 __pycache__/
+.pytest_cache/
 app/__pycache__/
 tests/__pycache__/
 archetype_profiles/
 .venv/
 documents/
 output/
+job_page_strategy/
 site_strategies/
 tests/

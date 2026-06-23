@@ -1,17 +1,28 @@
 import os
+import yaml
 from dotenv import load_dotenv
 
 # modules
 from app.postgres_mgr import PostgresManager
 
+def _load_user_config() -> dict:
+    """Load the user_preferences.yaml file if it exists."""
+    prefs_path = os.getenv("USER_PREFERENCES_YAML", "user_preferences.yaml")
+    config = {}
+    if os.path.exists(prefs_path):
+        with open(prefs_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+    return config
+
 def make_db():
     load_dotenv()
-    # define initialization params and initialize database
-    host = os.getenv("DB_HOST") or "localhost"
-    port = os.getenv("DB_PORT") or "5432"
-    user = os.getenv("DB_USER") or "postgres"
-    password = os.getenv("DB_PASSWORD") or ""
-    db_name = os.getenv("DB_NAME") or "web_scraper_db"
+    # Load from user_preferences.yaml with .env fallback
+    user_config = _load_user_config()
+    host = user_config.get("db_host") or os.getenv("DB_HOST") or "localhost"
+    port = user_config.get("db_port") or os.getenv("DB_PORT") or "5432"
+    user = user_config.get("db_user") or os.getenv("DB_USER") or "postgres"
+    password = user_config.get("db_password") or os.getenv("DB_PASSWORD") or ""
+    db_name = user_config.get("db_name") or os.getenv("DB_NAME") or "web_scraper_db"
 
     pg_mgr = PostgresManager(host, int(port), user, password)
     pg_mgr.create_database(db_name)

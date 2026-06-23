@@ -136,6 +136,11 @@ SCRAPERS_CONFIG='scrapers_config.yaml'
 
 GEMINMI_API_KEY=''
 # Google Gemini API key. Required only if using Gemini as an LLM provider.
+# Get a key at: https://aistudio.google.com/apikey
+
+OPENROUTER_API_KEY=''
+# OpenRouter API key. Required only if using OpenRouter as an LLM provider.
+# Get a key at: https://openrouter.ai/keys
 
 # ──────────────────────────────────────────────
 # LLM PROVIDERS — GENERAL CONFIGURATION
@@ -144,51 +149,70 @@ GEMINMI_API_KEY=''
 # The pipeline uses LLMs at multiple stages via the AIEngine abstraction layer.
 # Each stage accepts a `provider_name` parameter. Supported providers:
 #
-#   "lm_studio"  — Local inference via LM Studio (http://localhost:{LMS_PORT})
-#                  Works with any model loaded in LM Studio. Set LMS_URL, LMS_PORT below.
+#   "lm_studio"   — Local inference via LM Studio (http://localhost:{LMS_PORT})
+#                    Works with any model loaded in LM Studio. Set LMS_URL, LMS_PORT below.
 #
-#   "gemini"     — Google Gemini API. Requires GEMINMI_API_KEY to be set.
+#   "ollama"      — Local inference via Ollama (http://localhost:{OLLAMA_PORT})
+#                    Works with any model pulled to your local Ollama instance.
+#                    Set OLLAMA_URL, OLLAMA_PORT below.
 #
-#   "openai"     — OpenAI API. Requires OPENAI_API_KEY (not currently exposed, but
-#                  the engine can be extended to support it).
+#   "openrouter"  — Remote API via OpenRouter (https://openrouter.ai/api/v1)
+#                    Provides access to hundreds of models from many providers.
+#                    Requires OPENROUTER_API_KEY. Set OPENROUTER_BASE_URL below.
 #
-# You can mix providers across stages. For example, use lm_studio for fast local
-# extraction/embeddings and a remote provider for deep analysis.
+#   "gemini"      — Google Gemini API. Requires GEMINMI_API_KEY to be set.
 #
-# The MODEL variables are provider-specific model identifiers. For lm_studio, this
-# is the model name as loaded in the LM Studio server. For gemini, this would be
-# something like "gemini-2.0-flash". Leave blank to use the provider's default.
+#   "openai"      — Direct OpenAI API. Requires OPENAI_API_KEY (not currently exposed,
+#                    but the engine can be extended to support it).
+#
+# You can mix providers across stages. For example, use ollama for fast local
+# extraction/embeddings and openrouter for deep analysis with a stronger model.
+#
+# The MODEL variables are provider-specific model identifiers:
+#   - For lm_studio:  model name as loaded in the LM Studio server
+#   - For ollama:     model tag from `ollama list` (e.g. "llama3.1:8b")
+#   - For openrouter: model slug from openrouter.ai/models (e.g. "openai/gpt-4o")
+#   - For gemini:     model name (e.g. "gemini-2.0-flash")
+# Leave blank to use the provider's default model.
 
 # ─── Stage 2: Extraction (skills, requirements, summary from job descriptions) ───
 EXTRACTION_LLM='lm_studio'
-# Provider for LLM-based extraction: "lm_studio" or "gemini".
+# Provider for LLM-based extraction:
+#   "lm_studio", "ollama", "openrouter", or "gemini".
 
 EXTRACTION_MODEL=''
 # Model identifier for extraction. Examples:
-#   "gemma-4-26b-a4b-it-mlx"  (lm_studio)
-#   "gemini-2.0-flash"        (gemini)
+#   "gemma-4-26b-a4b-it-mlx"   (lm_studio)
+#   "llama3.1:8b"              (ollama)
+#   "openai/gpt-4o-mini"       (openrouter)
+#   "gemini-2.0-flash"         (gemini)
 # Leave blank to use the provider's default model.
 
 # ─── Stage 2: Embeddings (vector generation for titles, skills, descriptions) ───
 EMBEDDINGS_LLM='lm_studio'
-# Provider for embedding generation: "lm_studio" or "gemini".
+# Provider for embedding generation:
+#   "lm_studio", "ollama", "openrouter", or "gemini".
 
 EMBEDDINGS_MODEL=''
 # Model identifier for embeddings. Examples:
 #   "qwen3-embedding-8b-mxfp8"  (lm_studio)
+#   "nomic-embed-text:latest"   (ollama)
+#   "openai/text-embedding-3-small"  (openrouter)
 #   "text-embedding-004"        (gemini)
 # Leave blank to use the provider's default model.
 
 # ─── Stage 6: Cheap LLM Classification ───
 CHEAP_LLM_PROVIDER='lm_studio'
-# Provider for fast/cheap classification: "lm_studio" or "gemini".
+# Provider for fast/cheap classification:
+#   "lm_studio", "ollama", "openrouter", or "gemini".
 
 CHEAP_LLM_MODEL=''
 # Model identifier for cheap classification. Leave blank for provider default.
 
 # ─── Stage 7: Strong LLM Reranking ───
 STRONG_LLM_PROVIDER='lm_studio'
-# Provider for deep reranking: "lm_studio" or "gemini".
+# Provider for deep reranking:
+#   "lm_studio", "ollama", "openrouter", or "gemini".
 
 STRONG_LLM_MODEL=''
 # Model identifier for strong reranking. If left blank, falls back to CHEAP_LLM_MODEL.
@@ -210,6 +234,51 @@ LMS_PORT='1234'
 
 LMS_API_KEY='lm-studio'
 # API key for LM Studio (defaults to "lm-studio").
+
+# ──────────────────────────────────────────────
+# OLLAMA (ONLY NEEDED IF USING ollama PROVIDER)
+# ──────────────────────────────────────────────
+#
+# Ollama runs locally and serves an OpenAI-compatible API.
+# Install from https://ollama.com then pull models with:
+#   ollama pull llama3.1:8b
+#   ollama pull nomic-embed-text
+#
+# Make sure the Ollama service is running before using the pipeline
+# (it runs as a background service on install, or start with `ollama serve`).
+
+OLLAMA_URL='http://localhost'
+# Base URL of your Ollama server.
+
+OLLAMA_PORT='11434'
+# Port of your Ollama server (default: 11434).
+
+OLLAMA_API_KEY=''
+# API key for Ollama (typically not needed for local use; leave blank).
+
+# ──────────────────────────────────────────────
+# OPENROUTER (ONLY NEEDED IF USING openrouter PROVIDER)
+# ──────────────────────────────────────────────
+#
+# OpenRouter provides a unified API for hundreds of models from
+# OpenAI, Anthropic, Google, Meta, Mistral, and many more.
+# See available models at https://openrouter.ai/models
+#
+# Set the model identifier using the format "provider/model-name",
+# for example:
+#   - "openai/gpt-4o"
+#   - "anthropic/claude-sonnet-4-20250514"
+#   - "google/gemini-2.0-flash-001"
+#   - "meta-llama/llama-3.1-70b-instruct"
+#   - "mistralai/mixtral-8x22b-instruct"
+
+OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
+# Base URL for the OpenRouter API.
+# Change only if you are using a self-hosted or alternative endpoint.
+
+OPENROUTER_API_KEY=''
+# OpenRouter API key. Required for openrouter provider.
+# Get one at https://openrouter.ai/keys
 
 # ──────────────────────────────────────────────
 # SCRAPER API (OPTIONAL)

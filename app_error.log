@@ -1,0 +1,9 @@
+2026-06-22 12:03:42,558:ERROR:Adapter 'hiring_cafe' failed: Page.goto: Target page, context or browser has been closed
+Call log:
+  - navigating to "https://hiring.cafe/?searchState=%7B%22workplaceTypes%22%3A%5B%22Remote%22%2C%22Hybrid%22%2C%22Onsite%22%5D%2C%22dateFetchedPastNDays%22%3A14%2C%22jobTitleQuery%22%3A%22%5C%22support+engineer%5C%22+OR+%5C%22AI+support%5C%22+OR+%5C%22automation+engineer%5C%22+OR+%5C%22automation+specialist%5C%22+OR+%5C%22integration+engineer%5C%22+OR+%5C%22integration+specialist%5C%22+OR+%5C%22implementation+engineer%5C%22+OR+%5C%22implementation+specialist%5C%22+OR+%5C%22forward+deployed+engineer%5C%22%22%2C%22technologyKeywordsQuery%22%3A%22%5C%22python%5C%22+OR+%5C%22javascript%5C%22+OR+%5C%22typescript%5C%22+OR+%5C%22nodejs%5C%22+OR+%5C%22llm%5C%22+OR+%5C%22mcp%5C%22+OR+%5C%22rag%5C%22%22%7D", waiting until "networkidle"
+
+2026-06-22 13:32:56,765:ERROR:Failed to bypass Cloudflare challenge after all retries.
+2026-06-22 13:32:56,766:ERROR:Could not bypass Cloudflare challenge. Skipping URL.
+2026-06-22 13:33:54,750:ERROR:Failed to bypass Cloudflare challenge after all retries.
+2026-06-22 13:33:54,750:ERROR:Could not bypass Cloudflare challenge. Skipping URL.
+2026-06-22 13:50:41,803:ERROR:Adapter 'hiring_cafe' failed: Page.wait_for_timeout: Target page, context or browser has been closed

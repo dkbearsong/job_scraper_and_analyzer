@@ -9,6 +9,9 @@ from anthropic import Anthropic
 import google.genai as genai
 from google.genai import types
 
+# LLM Usage Tracking
+from app.llm_usage_tracker import usage_tracker
+
 class BaseAIProvider(ABC):
     """Abstract Base Class defining the interface for all AI providers."""
 
@@ -36,6 +39,8 @@ Do not include any conversational text, markdown formatting (like ```json), or e
 class OpenAIProvider(BaseAIProvider):
     def __init__(self, api_key=None):
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self._provider_name = "openai"
+
 
     def extract_structured_data(self, text: str) -> dict:
         try:
@@ -46,6 +51,11 @@ class OpenAIProvider(BaseAIProvider):
                     {"role": "user", "content": text}
                 ],
                 response_format={"type": "json_object"} # Ensures valid JSON
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model="gpt-4o",
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.choices[0].message.content
             if content is None:
@@ -61,6 +71,11 @@ class OpenAIProvider(BaseAIProvider):
                 input=text,
                 model="text-embedding-3-small"
             )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model="text-embedding-3-small",
+                operation="embedding", response=response,
+                context=f"generate_embedding ({len(text)} chars)"
+            )
             return response.data[0].embedding
         except Exception as e:
             print(f"[OpenAI Embedding Error] {e}")
@@ -69,14 +84,22 @@ class OpenAIProvider(BaseAIProvider):
 class ClaudeProvider(BaseAIProvider):
     def __init__(self, api_key=None):
         self.client = Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        self._provider_name = "claude"
+        self._model = "claude-3-5-sonnet-20240620"
+
 
     def extract_structured_data(self, text: str) -> dict:
         try:
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20240620",
+                model=self._model,
                 max_tokens=1000,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": text}]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self._model,
+                operation="extraction", response=message,
+                context=f"extract_structured_data ({len(text)} chars)"
             )
             # Claude may return content as a list of block objects, so extract text safely.
             content = None
@@ -115,7 +138,8 @@ class GeminiProvider(BaseAIProvider):
     def __init__(self, api_key=None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.api_key)
-        self.model_name = 'gemini-3-flash'
+        self._provider_name = "gemini"
+        self.model_name = 'gemini-2.0-flash-exp'
 
     def extract_structured_data(self, text: str, temp: float) -> dict:
         try:
@@ -126,6 +150,11 @@ class GeminiProvider(BaseAIProvider):
                 config=types.GenerateContentConfig(
                     temperature=0.1
                 )
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.model_name,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.text
             if content is None:
@@ -138,6 +167,11 @@ class GeminiProvider(BaseAIProvider):
     def generate_embedding(self, text: str) -> list:
         try:
             result = self.client.models.embed_content(model="text-embedding-004", contents=text)
+            usage_tracker.record(
+                provider=self._provider_name, model="text-embedding-004",
+                operation="embedding",
+                context=f"generate_embedding ({len(text)} chars)"
+            )
             embeddings = result.embeddings or []
             return [emb.values for emb in embeddings if emb is not None and getattr(emb, 'values', None) is not None]
         except Exception as e:
@@ -152,16 +186,25 @@ class OpenRouterProvider(BaseAIProvider):
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key or os.getenv("OPENROUTER_API_KEY")
         )
+        self._provider_name = "openrouter"
+        self._extraction_model = "anthropic/claude-3.5-sonnet"
+        self._embedding_model = "openai/text-embedding-3-small"
+
 
     def extract_structured_data(self, text: str) -> dict:
         try:
             response = self.client.chat.completions.create(
-                model="anthropic/claude-3.5-sonnet", # Example model via OpenRouter
+                model=self._extraction_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
                 ],
                 response_format={"type": "json_object"}
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self._extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.choices[0].message.content
             if content is None:
@@ -176,7 +219,12 @@ class OpenRouterProvider(BaseAIProvider):
         try:
             response = self.client.embeddings.create(
                 input=text,
-                model="openai/text-embedding-3-small" 
+                model=self._embedding_model
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self._embedding_model,
+                operation="embedding", response=response,
+                context=f"generate_embedding ({len(text)} chars)"
             )
             return response.data[0].embedding
         except Exception as e:
@@ -185,17 +233,26 @@ class OpenRouterProvider(BaseAIProvider):
 
 class LMStudioProvider(BaseAIProvider):
     """Local provider using LM Studio's OpenAI-compatible local server."""
-    def __init__(self, base_url="http://localhost", port='1234', api_key="lm-studio"):
+    def __init__(self, base_url="http://localhost", port='1234', api_key="lm-studio", extraction_model="local-model", embeddings_model="local-model"):
         self.client = OpenAI(base_url=f'{base_url}:{port}/v1', api_key=api_key)
+        self._provider_name = "lm_studio"
+        self.extraction_model = extraction_model
+        self.embeddings_model = embeddings_model
+
     def extract_structured_data(self, text: str) -> dict:
         try:
             response = self.client.chat.completions.create(
-                model=os.getenv('EXTRACTION_MODEL', 'local-model'), # LM Studio usually ignores this and uses the loaded model
+                model=self.extraction_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
                 ],
                 response_format={"type": "json_object"}
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.choices[0].message.content
             if content is None:
@@ -209,7 +266,12 @@ class LMStudioProvider(BaseAIProvider):
         try:
             response = self.client.embeddings.create(
                 input=text,
-                model="local-model"
+                model=self.embeddings_model
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.embeddings_model,
+                operation="embedding", response=response,
+                context=f"generate_embedding ({len(text)} chars)"
             )
             return response.data[0].embedding
         except Exception as e:
@@ -218,8 +280,10 @@ class LMStudioProvider(BaseAIProvider):
 
 class AIEngine:
     """The main controller that manages multiple AI providers."""
-    def __init__(self, default_provider_name: str):
+    def __init__(self, default_provider_name: str, extraction_model: str = "local-model", embeddings_model: str = "local-model"):
         self.default_provider_name = default_provider_name.lower()
+        self.extraction_model = extraction_model
+        self.embeddings_model = embeddings_model
         self._providers = {}
         # Initialize the default provider immediately
         self._get_provider(self.default_provider_name)
@@ -229,19 +293,30 @@ class AIEngine:
         if name in self._providers:
             return self._providers[name]
 
-        providers = {
+        provider_map = {
             "chatgpt": OpenAIProvider,
             "claude": ClaudeProvider,
             "gemini": GeminiProvider,
             "openrouter": OpenRouterProvider,
-            "lm_studio": LMStudioProvider(base_url=os.getenv('LMS_URL', 'http://localhost'),port=os.getenv('LMS_PORT', '1234'),api_key=os.getenv('LMS_API_KEY', 'lm-studio'))
+            "lm_studio": LMStudioProvider,
         }
         
-        provider_class = providers.get(name)
+        provider_class = provider_map.get(name)
         if not provider_class:
-            raise ValueError(f"Unknown provider: {name}. Choose from {list(providers.keys())}")
+            raise ValueError(f"Unknown provider: {name}. Choose from {list(provider_map.keys())}")
         
-        instance = provider_class()
+        # Handle LM Studio's custom constructor arguments
+        if name == "lm_studio":
+            instance = provider_class(
+                base_url=os.getenv('LMS_URL', 'http://localhost'),
+                port=os.getenv('LMS_PORT', '1234'),
+                api_key=os.getenv('LMS_API_KEY', 'lm-studio'),
+                extraction_model=self.extraction_model,
+                embeddings_model=self.embeddings_model
+            )
+        else:
+            instance = provider_class()
+        
         self._providers[name] = instance
         return instance
 

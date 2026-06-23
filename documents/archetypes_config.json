@@ -1,20 +1,20 @@
 [
     {
+        "name": "Cloud Support Engineer",
+        "title": "Senior Cloud Support Engineer",
+        "skills": "Python SQL NodeJS Javascript Typescript 'Cloud Platform' Communication Networking Troubleshooting Diagnostics Scripting Database",
+        "responsibilities": "Case Management and Incident Ownership. Technical Guidance and Support. Cross-Functional Collaboration. On-Call and Operational Coverage. Knowledge Management. AI-Assisted Troubleshooting. SLA and Process Adherence. Bug and Feature Reporting. Performance Analysis. Strategic Initiatives"
+    },
+    {
         "name": "AI Tooling Engineer",
-        "title": "Senior AI Tooling Engineer",
+        "title": "AI Tooling Engineer",
         "skills": "Python OpenAI LangChain Pinecone PyTorch LLMs",
         "responsibilities": "Develop AI-powered tools. Integrate LLMs into workflows. Optimize inference pipelines."
     },
     {
-        "name": "Backend Python Engineer",
-        "title": "Senior Backend Python Engineer",
-        "skills": "Python FastAPI PostgreSQL AWS Redis Docker",
-        "responsibilities": "Design scalable APIs. Optimize database performance. Deploy cloud services."
-    },
-    {
         "name": "Automation Engineer",
         "title": "QA Automation Engineer",
-        "skills": "Python Selenium Pytest Playwright Jenkins CI/CD",
-        "responsibilities": "Write automated test suites. Maintain CI pipelines."
+        "skills": "Python, Selenium, Pytest, Playwright, Jenkins, CI/CD, JavaScript/TypeScript, 'API Integration', AI/LLM, Frameworks, Scripting (Bash/PowerShell), n8n/zapier/workato, SQL, 'Cloud Infrastructure', 'Automation Frameworks'",
+        "responsibilities": "Design and Develop Automations. Maintain CI pipelines. Build and Deploy AI Agents. System Integration. Cross-Functional Collaboration. Prototyping and MVP Development. Technical Documentation. Mentorship and Training. Performance Monitoring and Optimization. Strategic Research. "
     }
 ]

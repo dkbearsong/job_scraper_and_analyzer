@@ -9,6 +9,7 @@ import time
 import numpy as np
 import yaml
 from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
 
 # Modules
 from app.pull_data import DataPuller
@@ -32,6 +33,9 @@ from app.fallback_scraping_instructions import (
     _pipeline_stage_scrape_legacy,
 )
 
+# LLM Usage Tracking
+from app.llm_usage_tracker import usage_tracker
+
 
 ############################# Global Variables and Configs ############################
 load_dotenv()
@@ -39,6 +43,16 @@ load_dotenv()
 # Archetype Definitions
 with open(os.getenv("ARCHETYPES_CONFIG", ""), 'r') as file:
     ARCHETYPES_CONFIG = json.load(file)
+
+# Load user_preferences.yaml for config values
+def _load_user_config() -> dict:
+    """Load the user_preferences.yaml file and return its contents."""
+    prefs_path = os.getenv("USER_PREFERENCES_YAML", "user_preferences.yaml")
+    config = {}
+    if os.path.exists(prefs_path):
+        with open(prefs_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+    return config
 
 ############################## Error Handlers #########################################
 
@@ -52,10 +66,74 @@ def error_logger_continue(error_msg):
     logging.error(error_msg)
     return
 
+
+# ── Pipeline Stats Logging ──
+
+def _setup_pipeline_stats_logger() -> logging.Logger:
+    """Configure and return a logger that writes pipeline stats to ``pipeline_stats.log``."""
+    logger = logging.getLogger("pipeline_stats")
+    logger.setLevel(logging.INFO)
+
+    # Avoid duplicate handlers on re-initialization
+    if logger.handlers:
+        return logger
+
+    handler = logging.FileHandler("pipeline_stats.log", mode="a", encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    # Prevent propagating to the root logger (which goes to app_error.log)
+    logger.propagate = False
+    return logger
+
+
+PIPELINE_STATS_LOGGER = _setup_pipeline_stats_logger()
+
+
+def _log_pipeline_stats(
+    stage_label: str,
+    job_count: int,
+    *,
+    skipped_count: int = 0,
+    source_hint: str = "",
+    extra: dict | None = None,
+) -> None:
+    """
+    Write a structured stats line to ``pipeline_stats.log``.
+
+    Format:
+        STAGE <label> | jobs=<N> | skipped=<M> | source=<hint> | extra=<json>
+
+    Args:
+        stage_label: Human-readable stage name (e.g. "1: Scrape").
+        job_count: Number of jobs entering/exiting this stage.
+        skipped_count: Number of jobs skipped (if applicable).
+        source_hint: Short description of the data source (e.g. "hiring_cafe").
+        extra: Optional dict of additional key=value pairs to log.
+    """
+    parts = [f"STAGE {stage_label}", f"jobs={job_count}"]
+    if skipped_count:
+        parts.append(f"skipped={skipped_count}")
+    if source_hint:
+        parts.append(f"source={source_hint}")
+    if extra:
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+    message = " | ".join(parts)
+    PIPELINE_STATS_LOGGER.info(message)
+
 ############################## Helper Functions #######################################
 def load_resume_as_text(type):
-    # doc = Document(input("Provide the path for the resume file to use: "))
-    doc = Document(os.getenv(type))
+    path = os.getenv(type)
+    if not path:
+        error_logger_continue(f"Environment variable '{type}' is not set.")
+        return ""
+    if path.lower().endswith('.txt'):
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    doc = Document(path)
     full_text = []
     for para in doc.paragraphs:
         full_text.append(para.text.strip())
@@ -176,8 +254,12 @@ def extract_and_cache_profile(ai: AIEngine, source_path: str, raw_text: str, cac
         print(f"Warning: empty text in {source_path}")
         return empty_result
 
+    # Load extraction LLM from user_preferences.yaml
+    _user_config = _load_user_config()
+    _extraction_llm = _user_config.get("extraction_llm", os.getenv("EXTRACTION_LLM", "lm_studio"))
+
     print(f"Extracting profile data from {source_path}...")
-    ai_data = call_llm_for_extraction(ai, raw_text, provider_name=os.getenv("EXTRACTION_LLM"))
+    ai_data = call_llm_for_extraction(ai, raw_text, provider_name=_extraction_llm)
     
     result = empty_result
     if isinstance(ai_data, dict):
@@ -244,13 +326,16 @@ async def pipeline_stage_setup(skip_db: bool = False, verbose: bool = False,
     else:
         user_profile = load_resume_as_text("PROFILE")
 
+    # Load configuration from user_preferences.yaml
+    user_config = _load_user_config()
+
     # Create Data Puller Object
     dp = DataPuller(
-        dbname=os.getenv("DB_NAME", ""),
-        user=os.getenv("DB_USER", ""),
-        password=os.getenv("DB_PASSWORD", ""),
-        host=os.getenv("DB_HOST", "localhost"),
-        port=os.getenv("DB_PORT", "5432")
+        dbname=user_config.get("db_name", os.getenv("DB_NAME", "")),
+        user=user_config.get("db_user", os.getenv("DB_USER", "")),
+        password=user_config.get("db_password", os.getenv("DB_PASSWORD", "")),
+        host=user_config.get("db_host", os.getenv("DB_HOST", "localhost")),
+        port=str(user_config.get("db_port", os.getenv("DB_PORT", "5432")))
     )
 
     # Get sites file from .env
@@ -264,7 +349,11 @@ async def pipeline_stage_setup(skip_db: bool = False, verbose: bool = False,
 
     # Extract skills and job titles from profile
     tp = TextProcessor()
-    ai = AIEngine(default_provider_name="lm_studio")
+    ai = AIEngine(
+        default_provider_name="lm_studio",
+        extraction_model=user_config.get("extraction_model", os.getenv("EXTRACTION_MODEL", "local-model")),
+        embeddings_model=user_config.get("embeddings_model", os.getenv("EMBEDDINGS_MODEL", "local-model"))
+    )
     skills_raw = tp.get_section_content(user_profile, "Skills")
     titles_raw = tp.get_section_content(user_profile, "Job Titles")
     skills = tp.clean_list_from_text(skills_raw)
@@ -302,12 +391,13 @@ async def pipeline_stage_setup(skip_db: bool = False, verbose: bool = False,
         "user_preferences": user_preferences,
         "sites": sites,
         "sites_file": sites_file,
+        "user_config": user_config,
         "db_config": {
-            "dbname": os.getenv("DB_NAME", ""),
-            "user": os.getenv("DB_USER", ""),
-            "password": os.getenv("DB_PASSWORD", ""),
-            "host": os.getenv("DB_HOST", "localhost"),
-            "port": os.getenv("DB_PORT", "5432"),
+            "dbname": user_config.get("db_name", os.getenv("DB_NAME", "")),
+            "user": user_config.get("db_user", os.getenv("DB_USER", "")),
+            "password": user_config.get("db_password", os.getenv("DB_PASSWORD", "")),
+            "host": user_config.get("db_host", os.getenv("DB_HOST", "localhost")),
+            "port": str(user_config.get("db_port", os.getenv("DB_PORT", "5432"))),
         },
     }
 
@@ -382,7 +472,10 @@ def _check_run_fallback_flag(config_path: str) -> bool:
 
 
 async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
-                                verbose: bool = False) -> List[Dict]:
+                                verbose: bool = False,
+                                max_pages: Optional[int] = None,
+                                headless: bool = True,
+                                debug_logging: bool = False) -> List[Dict]:
     """
     Stage 1: Scrape jobs using the pluggable adapter system.
 
@@ -394,6 +487,9 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         setup_data: Output from pipeline_stage_setup.
         skip_db: If True, skip database persistence.
         verbose: If True, print detailed debug output.
+        max_pages: Override max_pages for all adapters (e.g. CLI --pages).
+        headless: Override headless mode for all adapters (False = visible browser).
+        debug_logging: If True, enable debug-level logging.
 
     Returns:
         List[Dict] of scraped jobs in the 'processed_job_pool' format.
@@ -418,6 +514,18 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         try:
             loader = AdapterLoader(config_path=scrapers_config_path, verbose=verbose)
             loader.load_config()
+
+            # Apply CLI overrides to adapter configs before loading
+            if max_pages is not None or not headless or debug_logging:
+                for entry in loader._config.get("scrapers", []):
+                    cfg = entry.setdefault("config", {})
+                    if max_pages is not None:
+                        cfg["max_pages"] = max_pages
+                    if not headless:
+                        cfg["headless"] = False
+                    if debug_logging:
+                        cfg["debug"] = True
+
             adapter_list = loader.load_adapters()
 
             if adapter_list:
@@ -433,17 +541,22 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         except Exception as e:
             print(f"Adapter system failed: {e}. Falling back to legacy scraping.")
 
+    # Read enable_fallback_part_b from user preferences
+    enable_part_b = user_preferences.get("enable_fallback_part_b", False)
+
     # ── Fallback to legacy path if adapters didn't run ──
     if not used_adapters:
         all_scraped = await _pipeline_stage_scrape_legacy(
-            dp, user_preferences, sites, skip_db, verbose
+            dp, user_preferences, sites, skip_db, verbose,
+            enable_part_b=enable_part_b
         )
 
     # ── Also run fallback if explicitly configured to do so ──
     if used_adapters and _check_run_fallback_flag(scrapers_config_path):
         print("run_fallback_after_adapters is True — also running legacy fallback scraping...")
         fallback_jobs = await _pipeline_stage_scrape_legacy(
-            dp, user_preferences, sites, skip_db, verbose
+            dp, user_preferences, sites, skip_db, verbose,
+            enable_part_b=enable_part_b
         )
         if fallback_jobs:
             print(f"Merging {len(fallback_jobs)} fallback jobs with {len(all_scraped)} adapter jobs.")
@@ -495,6 +608,11 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         ai_engine = AIEngine(default_provider_name="lm_studio")
     if text_processor is None:
         text_processor = TextProcessor()
+
+    # Load LLM provider config from user_preferences.yaml
+    _user_config = _load_user_config()
+    _extraction_llm = _user_config.get("extraction_llm", os.getenv("EXTRACTION_LLM", "lm_studio"))
+    _embeddings_llm = _user_config.get("embeddings_llm", os.getenv("EMBEDDINGS_LLM", "lm_studio"))
 
     # First pass: deterministic extraction for jobs that don't have features yet
     print(f"Starting deterministic extraction on {len(jobs)} jobs...")
@@ -558,7 +676,7 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             continue
 
         # Extract skills, requirements and summary via LLM
-        ai_data = call_llm_for_extraction(ai_engine, description, provider_name=os.getenv("EXTRACTION_LLM", "lm_studio"))
+        ai_data = call_llm_for_extraction(ai_engine, description, provider_name=_extraction_llm)
 
         skills = []
         requirements = []
@@ -586,25 +704,25 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         # Vector generation
         title_text = features['title']
         if title_text:
-            job['embeddings']['title_vector'] = generate_embeddings(ai_engine, title_text, provider_name=os.getenv("EMBEDDINGS_LLM", "lm_studio"))
+            job['embeddings']['title_vector'] = generate_embeddings(ai_engine, title_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['title_vector'] = []
 
         skills_text = ", ".join(features['skills'])
         if skills_text:
-            job['embeddings']['skills_vector'] = generate_embeddings(ai_engine, skills_text, provider_name=os.getenv("EMBEDDINGS_LLM", "lm_studio"))
+            job['embeddings']['skills_vector'] = generate_embeddings(ai_engine, skills_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['skills_vector'] = []
 
         requirements_text = ", ".join(features['requirements'])
         if requirements_text:
-            job['embeddings']['requirements_vector'] = generate_embeddings(ai_engine, requirements_text, provider_name=os.getenv("EMBEDDINGS_LLM", "lm_studio"))
+            job['embeddings']['requirements_vector'] = generate_embeddings(ai_engine, requirements_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['requirements_vector'] = []
 
         summary_text = features['summary']
         if summary_text:
-            job['embeddings']['description_vector'] = generate_embeddings(ai_engine, summary_text, provider_name=os.getenv("EMBEDDINGS_LLM", "lm_studio"))
+            job['embeddings']['description_vector'] = generate_embeddings(ai_engine, summary_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['description_vector'] = []
 
@@ -986,8 +1104,10 @@ async def pipeline_stage_cheap_llm(jobs: List[Dict], setup_data: Optional[dict] 
         print("Warning: No user profile available for classification.")
 
     # Initialize cheap LLM classifier
-    cheap_llm_provider = os.getenv("CHEAP_LLM_PROVIDER", "gemini")
-    cheap_classifier = CheapLLMClassifier(provider=cheap_llm_provider)
+    _user_config = _load_user_config()
+    cheap_llm_provider = _user_config.get("cheap_llm_provider", os.getenv("CHEAP_LLM_PROVIDER", "gemini"))
+    cheap_llm_model = _user_config.get("cheap_llm_model", os.getenv("CHEAP_LLM_MODEL"))
+    cheap_classifier = CheapLLMClassifier(provider=cheap_llm_provider, model=cheap_llm_model)
 
     # Run Stage 6 on filtered job pool
     shortlisted_jobs = await process_stage_6(
@@ -1040,11 +1160,13 @@ async def pipeline_stage_strong_llm(jobs: List[Dict], setup_data: Optional[dict]
     skills = setup_data.get("skills", []) if setup_data else []
 
     # Initialize strong LLM reranker
-    strong_llm_provider = os.getenv("STRONG_LLM_PROVIDER", "claude")
-    strong_reranker = StrongLLMReranker(provider=strong_llm_provider)
+    _user_config = _load_user_config()
+    strong_llm_provider = _user_config.get("strong_llm_provider", os.getenv("STRONG_LLM_PROVIDER", "claude"))
+    strong_llm_model = _user_config.get("strong_llm_model", os.getenv("STRONG_LLM_MODEL"))
+    strong_reranker = StrongLLMReranker(provider=strong_llm_provider, model=strong_llm_model)
 
     # Configure how many jobs to deeply analyze
-    top_n_for_deep_analysis = int(os.getenv("TOP_N_DEEP_ANALYSIS", "15"))
+    top_n_for_deep_analysis = int(_user_config.get("top_n_deep_analysis", os.getenv("TOP_N_DEEP_ANALYSIS", "15")))
 
     # Run Stage 7 on top candidates from Stage 6
     deeply_analyzed_jobs = await process_stage_7(
@@ -1128,7 +1250,9 @@ async def pipeline_stage_final_queue(jobs: List[Dict], dp: Optional[DataPuller] 
 # ORIGINAL MAIN (calls pipeline stages)
 # =====================================================
 
-async def main():
+async def main(scrape_pages: Optional[int] = None,
+               scrape_visible: bool = False,
+               scrape_debug: bool = False):
     """
     Original main function - runs the full pipeline end-to-end.
     """
@@ -1141,13 +1265,18 @@ async def main():
     dp = setup_data["dp"]
     ai = setup_data["ai"]
     tp = setup_data["tp"]
+    _log_pipeline_stats("0: Setup", 0, source_hint="profile_extraction")
 
     # Stage 1: Scrape
     processed_job_pool = await pipeline_stage_scrape(
         setup_data=setup_data,
         skip_db=False,
         verbose=False,
+        max_pages=scrape_pages,
+        headless=not scrape_visible,
+        debug_logging=scrape_debug,
     )
+    _log_pipeline_stats("1: Scrape", len(processed_job_pool), source_hint="adapters+fallback")
 
     # Stage 2: Embedding Generation + LLM Extraction
     processed_job_pool = await pipeline_stage_embed_and_extract(
@@ -1158,6 +1287,7 @@ async def main():
         skip_db=False,
         verbose=False,
     )
+    _log_pipeline_stats("2: Embed+Extract", len(processed_job_pool), source_hint="llm_extraction")
 
     # Stage 3: Rule Filtering
     processed_job_pool = await pipeline_stage_rule_filter(
@@ -1166,6 +1296,8 @@ async def main():
         dp=dp,
         skip_db=False,
     )
+    skipped_count = sum(1 for j in processed_job_pool if j.get('skip'))
+    _log_pipeline_stats("3: Rule Filter", len(processed_job_pool), skipped_count=skipped_count, source_hint="hard_constraints")
 
     # Stage 4: Archetype Engine Integration
     active_jobs, archetype_manager = await pipeline_stage_archetype_integration(
@@ -1175,6 +1307,7 @@ async def main():
         setup_data=setup_data,
         skip_db=False,
     )
+    _log_pipeline_stats("4: Archetypes", len(active_jobs), source_hint="archetype_comparison")
 
     # Stage 5: Vector Scoring
     filtered_job_pool = await pipeline_stage_vector_scoring(
@@ -1183,6 +1316,7 @@ async def main():
         dp=dp,
         skip_db=False,
     )
+    _log_pipeline_stats("5: Vector Scoring", len(filtered_job_pool), source_hint="semantic_threshold")
 
     # Stage 6: Cheap LLM Classification
     shortlisted_jobs = await pipeline_stage_cheap_llm(
@@ -1191,6 +1325,7 @@ async def main():
         dp=dp,
         skip_db=False,
     )
+    _log_pipeline_stats("6: Cheap LLM", len(shortlisted_jobs), source_hint="cheap_llm_classifier")
 
     # Stage 7: Strong LLM Reranking
     deeply_analyzed_jobs = await pipeline_stage_strong_llm(
@@ -1199,6 +1334,7 @@ async def main():
         dp=dp,
         skip_db=False,
     )
+    _log_pipeline_stats("7: Strong LLM", len(deeply_analyzed_jobs), source_hint="strong_llm_reranker")
 
     # Stage 8: Final Application Queue
     final_queue = await pipeline_stage_final_queue(
@@ -1206,6 +1342,7 @@ async def main():
         dp=dp,
         skip_db=False,
     )
+    _log_pipeline_stats("8: Final Queue", len(final_queue), source_hint="final_ranking")
 
     # Pipeline Summary
     print("\n" + "=" * 60)
@@ -1217,17 +1354,80 @@ async def main():
     print(f"Jobs after strong LLM reranking: {len(deeply_analyzed_jobs)}")
     print(f"Final application queue: {len(final_queue)} jobs")
 
+    # LLM Usage Summary
+    usage_tracker.print_summary()
+
     return final_queue
 
 
 # Entry point
 if __name__ == "__main__":
     import sys
+    import argparse
 
     # Check for TUI mode
     if "--tui" in sys.argv or "-t" in sys.argv:
         from app.tui import run_tui
         run_tui()
-    else:
-        import asyncio
-        asyncio.run(main())
+        sys.exit(0)
+
+    parser = argparse.ArgumentParser(
+        description="Job Scraping and Analysis Pipeline"
+    )
+    parser.add_argument(
+        "--pages",
+        type=int,
+        default=None,
+        help="Max pages per URL for Stage 1 scraping (overrides config).",
+    )
+    parser.add_argument(
+        "--visible",
+        action="store_true",
+        help="Show browser window during scraping (disables headless mode).",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug-level logging.",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Path to a file where logs should be written.",
+    )
+    parser.add_argument(
+        "--skip-db",
+        action="store_true",
+        help="Skip database persistence for all stages.",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output.",
+    )
+
+    args = parser.parse_args()
+
+    # Apply log file if specified
+    if args.log_file:
+        import logging
+        file_handler = logging.FileHandler(args.log_file, mode="a", encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG if args.debug else logging.INFO)
+        formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)-7s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        file_handler.setFormatter(formatter)
+        root = logging.getLogger()
+        root.addHandler(file_handler)
+
+    if args.debug:
+        root.setLevel(logging.DEBUG)
+
+    import asyncio
+    asyncio.run(main(
+        scrape_pages=args.pages,
+        scrape_visible=args.visible,
+        scrape_debug=args.debug,
+    ))

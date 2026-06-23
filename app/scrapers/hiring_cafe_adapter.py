@@ -1,16 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import logging
+import os
 import random
 import re
+import sys
+import time
+import urllib.parse
 from typing import Any, Dict, List, Optional
 
-from playwright.async_api import ViewportSize, async_playwright
-from playwright_stealth import Stealth
+import yaml
+from playwright.async_api import ProxySettings, ViewportSize, async_playwright
+
+# Allow running this file directly (python app/scrapers/hiring_cafe_adapter.py)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from app.scrapers import ScraperAdapter
+
+try:
+    from playwright_stealth import Stealth
+    _STEALTH_AVAILABLE = True
+except Exception:
+    _STEALTH_AVAILABLE = False
 
 logger = logging.getLogger("scraper.hiring_cafe")
 
@@ -19,13 +35,55 @@ class HiringCafeAdapter(ScraperAdapter):
     """
     Scrapes job postings from hiring.cafe by opening each card's side panel
     to extract the full description.
+
+    Supports multiple URLs via a CSV file. The CSV path is specified in the
+    config as ``urls_csv``, which is usually resolved from the ``${HIRING_CAFE_URLS_CSV}``
+    environment variable. The number of pagination pages to scrape per URL is
+    read from ``user_preferences.yaml`` under the key ``hiring_cafe_pages_per_url``
+    (defaults to 2). If no CSV is configured, falls back to the default
+    ``https://hiring.cafe`` homepage.
     """
+
+    # Pool of realistic user agents for fingerprint randomization
+    _USER_AGENTS: List[str] = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    ]
+
+    # Common viewport sizes to randomize
+    _VIEWPORTS: List[ViewportSize] = [
+        {"width": 1280, "height": 720},
+        {"width": 1366, "height": 768},
+        {"width": 1440, "height": 900},
+        {"width": 1536, "height": 864},
+        {"width": 1920, "height": 1080},
+        {"width": 1600, "height": 900},
+    ]
+
+    # Common locales
+    _LOCALES: List[str] = [
+        "en-US",
+        "en-GB",
+        "en-CA",
+        "en-AU",
+    ]
 
     def __init__(self):
         super().__init__()
         self._max_pages: int = 5
         self._headless: bool = False
         self._viewport: ViewportSize = {"width": 1280, "height": 720}
+        self._urls_csv: Optional[str] = None
+        self._proxy_list: List[str] = []
+        self._current_proxy_index: int = 0
+        self._captcha_api_key: Optional[str] = None
+        self._captcha_service: str = "2captcha"  # or "capsolver"
 
     # ── Required ScraperAdapter interface ──
 
@@ -38,68 +96,699 @@ class HiringCafeAdapter(ScraperAdapter):
 
         Supported config keys:
             max_pages (int, default=5): Number of pagination pages to scrape.
+                This is overridden by ``hiring_cafe_pages_per_url`` from
+                ``user_preferences.yaml`` if that key is present.
             headless (bool, default=False): Run browser in headless mode.
+            urls_csv (str, optional): Path to a CSV file with a ``url`` column
+                containing hiring.cafe URLs to scrape.  If omitted, scrapes
+                the default ``https://hiring.cafe`` homepage.
+            proxy_list (list[str], optional): List of proxy URLs to rotate through.
+                Format: "http://user:pass@host:port" or "http://host:port".
+            captcha_api_key (str, optional): API key for 2Captcha or CapSolver.
+            captcha_service (str, default="2captcha"): CAPTCHA service to use
+                ("2captcha" or "capsolver").
         """
         self._max_pages = int(config.get("max_pages", 5))
         self._headless = bool(config.get("headless", False))
         self._name = config.get("name", self._name)
+
+        # Resolve the CSV path (already resolved by adapter_loader if using ${VAR})
+        csv_path = config.get("urls_csv", "")
+        if csv_path:
+            self._urls_csv = csv_path
+
+        # Load proxy list from config or environment
+        proxy_list = config.get("proxy_list", [])
+        if not proxy_list:
+            # Try loading from environment variable (comma-separated)
+            env_proxies = os.getenv("HIRING_CAFE_PROXY_LIST", "")
+            if env_proxies:
+                proxy_list = [p.strip() for p in env_proxies.split(",") if p.strip()]
+        self._proxy_list = proxy_list
+        if self._proxy_list:
+            self.logger.info(f"Loaded {len(self._proxy_list)} proxies for rotation.")
+
+        # Load CAPTCHA solving configuration
+        captcha_key = config.get("captcha_api_key", "")
+        if not captcha_key:
+            # Try environment variables for different services
+            captcha_key = (
+                os.getenv("TWOCAPTCHA_API_KEY") or
+                os.getenv("CAPSOLVER_API_KEY") or
+                os.getenv("CAPTCHA_API_KEY") or
+                ""
+            )
+        self._captcha_api_key = captcha_key or None
+
+        captcha_service = config.get("captcha_service", "")
+        if not captcha_service:
+            captcha_service = os.getenv("CAPTCHA_SERVICE", "2captcha")
+        if captcha_service:
+            self._captcha_service = captcha_service
+
+        if self._captcha_api_key:
+            self.logger.info(f"CAPTCHA solver configured: {self._captcha_service}")
+
+        # Override max_pages from user_preferences.yaml if present
+        self._load_pages_from_user_preferences()
+
         self.logger = logging.getLogger(f"scraper.{self._name}")
         self.logger.info(
-            f"Configured: max_pages={self._max_pages}, headless={self._headless}"
+            f"Configured: max_pages={self._max_pages}, headless={self._headless}, "
+            f"urls_csv={self._urls_csv}"
         )
+
+    # ── Fingerprint and proxy helpers ──
+
+    def _get_random_user_agent(self) -> str:
+        """Return a random user agent from the pool."""
+        return random.choice(self._USER_AGENTS)
+
+    def _get_random_viewport(self) -> ViewportSize:
+        """Return a random viewport size."""
+        return random.choice(self._VIEWPORTS)
+
+    def _get_random_locale(self) -> str:
+        """Return a random locale."""
+        return random.choice(self._LOCALES)
+
+    @staticmethod
+    def _get_timezone_for_locale(locale: str) -> str:
+        """Map locale to a realistic timezone."""
+        tz_map = {
+            "en-US": "America/New_York",
+            "en-GB": "Europe/London",
+            "en-CA": "America/Toronto",
+            "en-AU": "Australia/Sydney",
+        }
+        return tz_map.get(locale, "America/New_York")
+
+    def _get_next_proxy(self) -> Optional[ProxySettings]:
+        """Rotate to the next proxy in the list. Returns Playwright proxy config."""
+        if not self._proxy_list:
+            return None
+
+        proxy_url = self._proxy_list[self._current_proxy_index]
+        self._current_proxy_index = (self._current_proxy_index + 1) % len(self._proxy_list)
+
+        self.logger.debug(f"Using proxy: {proxy_url}")
+
+        # Parse proxy URL - Playwright expects server, and optionally username/password
+        proxy_config: ProxySettings = {"server": proxy_url}
+
+        # If proxy contains credentials, extract them
+        if "@" in proxy_url:
+            # Format: http://user:pass@host:port
+            parsed = urllib.parse.urlparse(proxy_url)
+            proxy_config["server"] = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+            if parsed.username:
+                proxy_config["username"] = parsed.username
+            if parsed.password:
+                proxy_config["password"] = parsed.password
+
+        return proxy_config
+
+    # ── Stealth and anti-detection ──
+
+    async def _inject_stealth_scripts(self, context) -> None:
+        """Inject JavaScript patches to mask automation fingerprint."""
+        # Patch navigator.webdriver
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false
+            });
+        """)
+
+        # Patch chrome object
+        await context.add_init_script("""
+            window.chrome = {
+                runtime: {}
+            };
+        """)
+
+        # Patch permissions
+        await context.add_init_script("""
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        """)
+
+        # Patch plugins
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+        """)
+
+        # Patch languages
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+        """)
+
+        # Mask automation in iframe
+        await context.add_init_script("""
+            // Patch for iframe contentWindow
+            const originalContentWindow = HTMLIFrameElement.prototype.contentWindow;
+            Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                get: function() {
+                    const win = originalContentWindow.call(this);
+                    if (win) {
+                        Object.defineProperty(win.navigator, 'webdriver', {
+                            get: () => false
+                        });
+                    }
+                    return win;
+                }
+            });
+        """)
+
+        # Override automation-related properties
+        await context.add_init_script("""
+            // Override automation-related properties
+            const puppeteerFuncNames = [
+                'scroll', 'scrollTo', 'scrollBy', 'scrollIntoView',
+                'getBoundingClientRect', 'getClientRects', 'focus'
+            ];
+
+            puppeteerFuncNames.forEach(name => {
+                const original = Element.prototype[name];
+                if (original) {
+                    Element.prototype[name] = function(...args) {
+                        const result = original.apply(this, args);
+                        return result;
+                    };
+                }
+            });
+        """)
+
+    # ── Cloudflare detection and handling ──
+
+    async def _detect_cloudflare_challenge(self, page) -> bool:
+        """Detect if Cloudflare challenge page is present.
+        
+        Only returns True for unmistakable Cloudflare challenge signatures.
+        This is intentionally conservative to avoid false positives on legitimate pages.
+        """
+        try:
+            page_title = (await page.title()).lower()
+            page_content = (await page.content()).lower()
+
+            # ONLY check for the most unmistakable Cloudflare challenge title
+            # "just a moment" is the classic Cloudflare interstitial title
+            if "just a moment" in page_title:
+                self.logger.warning(f"Cloudflare detected: title='{page_title}'")
+                return True
+
+            # ONLY check for the most unmistakable Cloudflare content signature
+            # "cloudflare ray id:" is unique to actual Cloudflare challenge pages
+            if "cloudflare ray id:" in page_content:
+                self.logger.warning("Cloudflare detected: ray ID in page content")
+                return True
+
+            # Check for specific Cloudflare challenge iframe domains
+            challenge_iframes = [
+                "iframe[src*='challenges.cloudflare.com']",
+            ]
+
+            for selector in challenge_iframes:
+                iframe = await page.query_selector(selector)
+                if iframe:
+                    self.logger.warning(f"Cloudflare detected: iframe found ({selector})")
+                    return True
+
+            # No Cloudflare challenge detected - this is a normal page
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"Error detecting Cloudflare challenge: {e}")
+            return False
+
+    async def _handle_cloudflare_block(self, page, url: str, max_retries: int = 3) -> bool:
+        """
+        Attempt to bypass Cloudflare challenge.
+
+        Returns True if challenge was bypassed, False otherwise.
+        """
+        for attempt in range(max_retries):
+            self.logger.info(
+                f"Cloudflare challenge detected (attempt {attempt + 1}/{max_retries}), "
+                f"attempting bypass..."
+            )
+
+            # Wait for potential automatic bypass
+            await page.wait_for_timeout(5000)
+
+            # Check if challenge was solved automatically
+            if not await self._detect_cloudflare_challenge(page):
+                self.logger.info("Cloudflare challenge bypassed successfully.")
+                return True
+
+            # If CAPTCHA is present, try to solve it
+            if await self._captcha_is_present(page):
+                self.logger.info("CAPTCHA detected, attempting to solve...")
+                solved = await self._solve_captcha_if_present(page)
+                if solved:
+                    await page.wait_for_timeout(3000)
+                    if not await self._detect_cloudflare_challenge(page):
+                        return True
+
+            # Try clicking the checkbox if present (Turnstile)
+            if await self._click_turnstile_checkbox(page):
+                await page.wait_for_timeout(3000)
+                if not await self._detect_cloudflare_challenge(page):
+                    self.logger.info("Turnstile checkbox clicked successfully.")
+                    return True
+
+            # Reload the page as last resort
+            if attempt < max_retries - 1:
+                self.logger.info("Reloading page to retry challenge...")
+                await page.reload(wait_until="networkidle")
+                await page.wait_for_timeout(5000)
+
+        self.logger.error("Failed to bypass Cloudflare challenge after all retries.")
+        return False
+
+    async def _captcha_is_present(self, page) -> bool:
+        """Check if a CAPTCHA is present on the page."""
+        captcha_selectors = [
+            "iframe[src*='hcaptcha']",
+            "iframe[src*='turnstile']",
+            "iframe[src*='recaptcha']",
+            "[data-site-key]",
+            "[id*='captcha']",
+            "[class*='captcha']",
+        ]
+
+        for selector in captcha_selectors:
+            if await page.query_selector(selector):
+                return True
+
+        return False
+
+    async def _solve_captcha_if_present(self, page) -> bool:
+        """
+        Solve CAPTCHA using configured service (2Captcha or CapSolver).
+
+        Returns True if CAPTCHA was solved or not present.
+        """
+        if not self._captcha_api_key:
+            self.logger.warning("CAPTCHA detected but no API key configured.")
+            return False
+
+        try:
+            site_key = await self._extract_captcha_site_key(page)
+            if not site_key:
+                self.logger.warning("Could not extract CAPTCHA site key.")
+                return False
+
+            self.logger.info(f"Solving CAPTCHA with {self._captcha_service}...")
+
+            if self._captcha_service == "2captcha":
+                solution = await self._solve_2captcha(site_key, page.url)
+            elif self._captcha_service == "capsolver":
+                solution = await self._solve_capsolver(site_key, page.url)
+            else:
+                self.logger.error(f"Unknown CAPTCHA service: {self._captcha_service}")
+                return False
+
+            if solution:
+                await self._inject_captcha_solution(page, solution)
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Error solving CAPTCHA: {e}")
+            return False
+
+    async def _extract_captcha_site_key(self, page) -> Optional[str]:
+        """Extract CAPTCHA site key from page."""
+        try:
+            # Try data-site-key attribute
+            site_key = await page.get_attribute("[data-site-key]", "data-site-key")
+            if site_key:
+                return site_key
+
+            # Try to find in iframe src
+            iframe = await page.query_selector("iframe[src*='hcaptcha'], iframe[src*='turnstile']")
+            if iframe:
+                src = await iframe.get_attribute("src")
+                # Extract site key from URL
+                match = re.search(r'[?&]sitekey=([^&]+)', src or '')
+                if match:
+                    return match.group(1)
+
+            return None
+        except Exception:
+            return None
+
+    async def _solve_2captcha(self, site_key: str, page_url: str) -> Optional[str]:
+        """Solve CAPTCHA using 2Captcha API."""
+        try:
+            api_url = "http://2captcha.com/in.php"
+            params = {
+                "key": self._captcha_api_key,
+                "method": "turnstile",
+                "sitekey": site_key,
+                "pageurl": page_url,
+                "json": 1,
+            }
+
+            # Submit CAPTCHA
+            async with page.context.request.get(api_url, params=params) as response:
+                result = await response.json()
+
+            if result.get("status") != 1:
+                self.logger.error(f"2Captcha submission failed: {result.get('request')}")
+                return None
+
+            captcha_id = result.get("request")
+            self.logger.info(f"CAPTCHA submitted, ID: {captcha_id}")
+
+            # Poll for solution
+            for _ in range(30):  # Wait up to 2 minutes
+                await asyncio.sleep(4)
+                check_url = "http://2captcha.com/res.php"
+                params = {
+                    "key": self._captcha_api_key,
+                    "action": "get",
+                    "id": captcha_id,
+                    "json": 1,
+                }
+
+                async with page.context.request.get(check_url, params=params) as response:
+                    result = await response.json()
+
+                if result.get("status") == 1:
+                    self.logger.info("CAPTCHA solved successfully.")
+                    return result.get("request")
+
+            self.logger.error("CAPTCHA solving timeout.")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"2Captcha error: {e}")
+            return None
+
+    async def _solve_capsolver(self, site_key: str, page_url: str) -> Optional[str]:
+        """Solve CAPTCHA using CapSolver API."""
+        try:
+            api_url = "https://api.capsolver.com/createTask"
+
+            payload = {
+                "clientKey": self._captcha_api_key,
+                "task": {
+                    "type": "antiTurnstileTaskProxyLess",
+                    "websiteURL": page_url,
+                    "websiteKey": site_key,
+                }
+            }
+
+            # Create task
+            async with page.context.request.post(api_url, json=payload) as response:
+                result = await response.json()
+
+            if result.get("errorId") != 0:
+                self.logger.error(f"CapSolver submission failed: {result.get('errorDescription')}")
+                return None
+
+            task_id = result.get("taskId")
+            self.logger.info(f"CapSolver task created, ID: {task_id}")
+
+            # Poll for solution
+            for _ in range(30):  # Wait up to 2 minutes
+                await asyncio.sleep(4)
+                check_url = "https://api.capsolver.com/getTaskResult"
+                payload = {
+                    "clientKey": self._captcha_api_key,
+                    "taskId": task_id,
+                }
+
+                async with page.context.request.post(check_url, json=payload) as response:
+                    result = await response.json()
+
+                if result.get("status") == "ready":
+                    solution = result.get("solution", {})
+                    token = solution.get("token")
+                    if token:
+                        self.logger.info("CAPTCHA solved successfully.")
+                        return token
+
+            self.logger.error("CapSolver timeout.")
+            return None
+
+        except Exception as e:
+            self.logger.error(f"CapSolver error: {e}")
+            return None
+
+    async def _inject_captcha_solution(self, page, solution: str) -> None:
+        """Inject CAPTCHA solution token into the page."""
+        try:
+            await page.evaluate(f"""
+                (solution) => {{
+                    // Try Turnstile
+                    const turnstileWidget = document.querySelector('[data-turnstile]');
+                    if (turnstileWidget) {{
+                        turnstileWidget.setAttribute('data-turnstile-response', solution);
+                    }}
+
+                    // Trigger callback if exists
+                    if (window.turnstile && window.turnstile.render) {{
+                        // The solution will be picked up on next validation
+                    }}
+
+                    // Inject into textarea (common pattern)
+                    const textarea = document.querySelector('textarea[name="cf-turnstile-response"]');
+                    if (textarea) {{
+                        textarea.value = solution;
+                        textarea.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    }}
+
+                    const textarea2 = document.querySelector('textarea[name="g-recaptcha-response"]');
+                    if (textarea2) {{
+                        textarea2.value = solution;
+                        textarea2.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    }}
+                }}
+            """, solution)
+        except Exception as e:
+            self.logger.error(f"Error injecting CAPTCHA solution: {e}")
+
+    async def _click_turnstile_checkbox(self, page) -> bool:
+        """Click Turnstile checkbox if present."""
+        try:
+            # Look for the checkbox iframe
+            iframe = await page.query_selector("iframe[src*='turnstile'], iframe[src*='challenges']")
+            if not iframe:
+                return False
+
+            # Click within the iframe
+            frame = await iframe.content_frame()
+            if frame:
+                checkbox = await frame.query_selector("input[type='checkbox'], .checkbox")
+                if checkbox:
+                    await checkbox.click()
+                    return True
+
+            return False
+        except Exception:
+            return False
+
+    # ── Load page count from user_preferences.yaml ──
+
+    def _load_pages_from_user_preferences(self) -> None:
+        """
+        Read ``hiring_cafe_pages_per_url`` from ``user_preferences.yaml`` and
+        override ``self._max_pages`` if the key is present.
+        """
+        prefs_path = os.getenv("USER_PREFERENCES_YAML", "user_preferences.yaml")
+        if not os.path.exists(prefs_path):
+            return
+        try:
+            with open(prefs_path, "r") as f:
+                prefs = yaml.safe_load(f) or {}
+            pages = prefs.get("hiring_cafe_pages_per_url")
+            if pages is not None:
+                self._max_pages = int(pages)
+        except Exception as e:
+            self.logger.warning(
+                f"Could not read 'hiring_cafe_pages_per_url' from {prefs_path}: {e}"
+            )
+
+    # ── Load URLs from CSV ──
+
+    def _load_urls_from_csv(self) -> List[str]:
+        """
+        Read the CSV file at ``self._urls_csv`` and return all URLs from the
+        ``url`` column.  Returns an empty list if the file is missing or empty.
+        """
+        urls: List[str] = []
+        if not self._urls_csv or not os.path.exists(self._urls_csv):
+            return urls
+
+        try:
+            with open(self._urls_csv, "r", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    url = (row.get("url") or "").strip()
+                    if url:
+                        urls.append(url)
+            self.logger.info(f"Loaded {len(urls)} URL(s) from {self._urls_csv}")
+        except Exception as e:
+            self.logger.error(f"Failed to read URLs from {self._urls_csv}: {e}")
+
+        return urls
+
+    # ── Main scrape entry point ──
 
     async def scrape(self) -> List[Dict[str, Any]]:
         """
         Execute the scraping operation.
+
+        If a CSV file was configured, scrapes each URL in the CSV for up to
+        ``self._max_pages`` pages each.  Otherwise scrapes the default
+        ``https://hiring.cafe`` homepage.
 
         Returns:
             List of job dicts conforming to the JobData schema.
         """
         all_jobs: List[Dict[str, Any]] = []
 
-        self.logger.info("Starting HiringCafe scraper...")
+        # Determine which URLs to scrape
+        urls_to_scrape = self._load_urls_from_csv()
+        if not urls_to_scrape:
+            urls_to_scrape = ["https://hiring.cafe"]
+            self.logger.info("No CSV configured or empty CSV — using default URL.")
+
+        self.logger.info(
+            f"Starting HiringCafe scraper for {len(urls_to_scrape)} URL(s) "
+            f"({self._max_pages} page(s) each)..."
+        )
 
         async with Stealth().use_async(async_playwright()) as p:
-            browser = await p.chromium.launch(headless=self._headless)
-            context = await browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport=self._viewport,
+            # Rotate proxy per URL if proxy list is configured
+            proxy = self._get_next_proxy() if self._proxy_list else None
+
+            browser = await p.chromium.launch(
+                headless=self._headless,
+                proxy=proxy,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-web-security",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ]
             )
 
-            page = await context.new_page()
+            # Randomize fingerprint for each scrape session
+            viewport = self._get_random_viewport()
+            user_agent = self._get_random_user_agent()
+            locale = self._get_random_locale()
 
+            context = await browser.new_context(
+                user_agent=user_agent,
+                viewport=viewport,
+                locale=locale,
+                timezone_id=self._get_timezone_for_locale(locale),
+                permissions=["geolocation"],
+                geolocation={"latitude": 40.7128, "longitude": -74.0060},
+                extra_http_headers={
+                    "Accept-Language": f"{locale},en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                }
+            )
+
+            # Inject stealth scripts to mask automation
+            await self._inject_stealth_scripts(context)
+
+            page = await context.new_page()
             page.on("response", self._intercept_response)
 
-            self.logger.info("Navigating to https://hiring.cafe ...")
-            await page.goto("https://hiring.cafe", wait_until="networkidle")
+            for url_index, url in enumerate(urls_to_scrape, start=1):
+                self.logger.info(
+                    f"=== Processing URL {url_index}/{len(urls_to_scrape)}: {url} ==="
+                )
 
-            self.logger.info("Waiting for session authorization...")
-            await page.wait_for_timeout(7000)
+                # Create new page with fresh fingerprint for each URL
+                if url_index > 1:
+                    await page.close()
+                    page = await context.new_page()
+                    page.on("response", self._intercept_response)
 
-            for page_num in range(1, self._max_pages + 1):
-                self.logger.info(f"--- Processing Page {page_num} ---")
-
-                page_jobs = await self._extract_jobs_from_page(page)
+                page_jobs = await self._scrape_single_url(page, url)
                 all_jobs.extend(page_jobs)
-                self.logger.info(f"Page {page_num}: extracted {len(page_jobs)} jobs.")
-
-                self.logger.info("Checking for next page...")
-                next_button = await page.query_selector("[aria-label='Next page']")
-                if next_button and await next_button.is_visible():
-                    await next_button.click()
-                    self.logger.info("Navigating to next page...")
-                    await page.wait_for_timeout(5000)
-                else:
-                    self.logger.info("No more pages found.")
-                    break
+                self.logger.info(f"URL {url_index}: extracted {len(page_jobs)} jobs.")
 
             await browser.close()
 
-        self.logger.info(f"Scraping complete. Total jobs: {len(all_jobs)}")
+        self.logger.info(
+            f"Scraping complete across {len(urls_to_scrape)} URL(s). "
+            f"Total jobs: {len(all_jobs)}"
+        )
         return all_jobs
+
+    # ── Scrape a single URL ──
+
+    async def _scrape_single_url(
+        self, page, url: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Navigate to *url* on hiring.cafe and scrape jobs across up to
+        ``self._max_pages`` pages of results.
+
+        Args:
+            page: Playwright page object (already in a browser context).
+            url: The hiring.cafe URL to scrape.
+
+        Returns:
+            List of job dicts scraped from this URL.
+        """
+        url_jobs: List[Dict[str, Any]] = []
+
+        self.logger.info(f"Navigating to {url} ...")
+        await page.goto(url, wait_until="networkidle")
+
+        # Quick check for Cloudflare challenge
+        if await self._detect_cloudflare_challenge(page):
+            self.logger.warning("Cloudflare challenge detected on initial load!")
+            bypassed = await self._handle_cloudflare_block(page, url)
+            if not bypassed:
+                self.logger.error("Could not bypass Cloudflare challenge. Skipping URL.")
+                return url_jobs
+            # Wait for page to fully load after bypass
+            await page.wait_for_timeout(5000)
+
+        self.logger.info("Waiting for session authorization...")
+        await page.wait_for_timeout(7000)
+
+        for page_num in range(1, self._max_pages + 1):
+            self.logger.info(f"--- URL: {url} | Page {page_num} ---")
+
+            page_jobs = await self._extract_jobs_from_page(page)
+            url_jobs.extend(page_jobs)
+            self.logger.info(f"Page {page_num}: extracted {len(page_jobs)} jobs.")
+
+            self.logger.info("Checking for next page...")
+            next_button = await page.query_selector("[aria-label='Next page']")
+            if next_button and await next_button.is_visible():
+                await next_button.click()
+                self.logger.info("Navigating to next page...")
+                await page.wait_for_timeout(5000)
+            else:
+                self.logger.info("No more pages found.")
+                break
+
+        return url_jobs
 
     # ── Internal helpers ──
 
@@ -121,6 +810,16 @@ class HiringCafeAdapter(ScraperAdapter):
         side panel to retrieve the full description.
         """
         jobs: List[Dict[str, Any]] = []
+
+        # Check for Cloudflare challenge before proceeding
+        if await self._detect_cloudflare_challenge(page):
+            self.logger.warning("Cloudflare challenge detected during scraping!")
+            bypassed = await self._handle_cloudflare_block(page, page.url)
+            if not bypassed:
+                self.logger.error("Could not bypass Cloudflare challenge. Returning empty.")
+                return jobs
+            # Wait for page to settle after bypass
+            await page.wait_for_timeout(3000)
 
         grid_selector = "div[class*='grid'][class*='grid-cols-1']"
         side_panel = "div.chakra-slide"

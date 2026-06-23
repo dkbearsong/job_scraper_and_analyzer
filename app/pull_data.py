@@ -4,6 +4,8 @@ import asyncio
 import os
 import csv
 import time
+import yaml
+from dotenv import load_dotenv
 from random import random
 from datetime import date
 from collections import defaultdict
@@ -12,8 +14,10 @@ from collections import defaultdict
 from app.postgres_mgr import PostgresManager
 from app.make_db import make_db
 
-ws_micro_host = "http://localhost"
-ws_micro_port = "5052"
+load_dotenv()
+
+ws_micro_host = os.getenv("SCRAPER_HOST")
+ws_micro_port = os.getenv("SCRAPER_PORT")
 
 class DataPuller:
     def __init__(self, host: str = "localhost", port: str = "5432", user: str = "postgres", password: str = "", dbname: str = "postgres"):
@@ -450,12 +454,18 @@ def main():
     from dotenv import load_dotenv
     
     load_dotenv()
+    # Load from user_preferences.yaml with .env fallback
+    user_config = {}
+    prefs_path = os.getenv("USER_PREFERENCES_YAML", "user_preferences.yaml")
+    if os.path.exists(prefs_path):
+        with open(prefs_path, 'r') as f:
+            user_config = yaml.safe_load(f) or {}
     dp = DataPuller(
-        dbname = os.getenv("DB_NAME", ""),
-        user = os.getenv("DB_USER", ""),
-        password = os.getenv("DB_PASSWORD", ""),
-        host = os.getenv("DB_HOST", "localhost"),
-        port = os.getenv("DB_PORT", "5432")
+        dbname = user_config.get("db_name", os.getenv("DB_NAME", "")),
+        user = user_config.get("db_user", os.getenv("DB_USER", "")),
+        password = user_config.get("db_password", os.getenv("DB_PASSWORD", "")),
+        host = user_config.get("db_host", os.getenv("DB_HOST", "localhost")),
+        port = str(user_config.get("db_port", os.getenv("DB_PORT", "5432")))
     )
     query = f'''
         SELECT DISTINCT c.company_name AS company, c.company_url, j.source

@@ -1,0 +1,12 @@
+2026-06-21 17:08:49 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-21 19:33:42 | STAGE 1: Scrape | jobs=575 | source=adapters+fallback
+2026-06-22 12:02:28 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 12:03:24 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 12:03:42 | STAGE 1: Scrape | jobs=15 | source=adapters+fallback
+2026-06-22 12:04:27 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 13:31:54 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 13:33:54 | STAGE 1: Scrape | jobs=15 | source=adapters+fallback
+2026-06-22 13:50:17 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 13:50:36 | STAGE 0: Setup | jobs=0 | source=profile_extraction
+2026-06-22 13:50:41 | STAGE 1: Scrape | jobs=15 | source=adapters+fallback
+2026-06-22 14:13:36 | STAGE 0: Setup | jobs=0 | source=profile_extraction
