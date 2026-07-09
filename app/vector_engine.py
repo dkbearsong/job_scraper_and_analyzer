@@ -99,6 +99,14 @@ class CloudEmbeddingProvider(EmbeddingProvider):
         # Extract embeddings and convert to numpy array
         return np.array([data.embedding for data in response.data])
 
+class CallableEmbeddingProvider(EmbeddingProvider):
+    """An embedding provider that wraps any callable generating embeddings."""
+    def __init__(self, embed_fn):
+        self.embed_fn = embed_fn
+
+    def generate(self, texts: List[str]) -> np.ndarray:
+        return np.array([self.embed_fn(text) for text in texts], dtype=np.float32)
+
 # --- Main Engine Class ---
 
 class VectorEngine:
@@ -140,9 +148,16 @@ class VectorEngine:
 
     def compute_similarity(self, vec_a: np.ndarray, vec_b: np.ndarray) -> float:
         """Calculates Cosine Similarity between two vectors."""
+        # Guard against empty or zero-norm vectors
+        if vec_a.size == 0 or vec_b.size == 0:
+            return 0.0
+        norm_a_norm = np.linalg.norm(vec_a)
+        norm_b_norm = np.linalg.norm(vec_b)
+        if norm_a_norm == 0 or norm_b_norm == 0:
+            return 0.0
         # Normalize vectors to unit length for cosine similarity via dot product
-        norm_a = vec_a / np.linalg.norm(vec_a)
-        norm_b = vec_b / np.linalg.norm(vec_b)
+        norm_a = vec_a / norm_a_norm
+        norm_b = vec_b / norm_b_norm
         return float(np.dot(norm_a, norm_b))
 
     def rank_similarities(self, query_embedding: np.ndarray, document_embeddings: np.ndarray, metadata: List[Dict]) -> List[Dict]:

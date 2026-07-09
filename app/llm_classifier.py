@@ -135,6 +135,42 @@ def _validate_enum(value: str, allowed: tuple[str, ...], default: str) -> str:
     return value if value in allowed else default
 
 
+def _parse_json_content(content: str) -> dict | None:
+    """
+    Attempt to parse JSON from model output.
+    Handles markdown code blocks and extra text around JSON.
+    Returns None if no valid JSON can be extracted.
+    """
+    if not content or not content.strip():
+        return None
+
+    content = content.strip()
+
+    # Try direct parse first
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass
+
+    # Try extracting from markdown code blocks
+    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
+    if json_match:
+        try:
+            return json.loads(json_match.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+
+    # Try finding first { ... } block
+    brace_match = re.search(r'\{[\s\S]*\}', content)
+    if brace_match:
+        try:
+            return json.loads(brace_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 class CheapLLMClassifier:
     """
     Stage 6: Fast, structured fit analysis using lightweight models.
@@ -205,6 +241,9 @@ class CheapLLMClassifier:
                 )
                 content = response.text
             elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
+                kwa = {}
+                if self.provider != "lm_studio":
+                    kwa["response_format"] = {"type": "json_object"}
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
@@ -212,7 +251,7 @@ class CheapLLMClassifier:
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.1,
-                    response_format={"type": "json_object"}
+                    **kwa
                 )
                 usage_tracker.record_from_response(
                     provider=self.provider, model=self.model or "unknown",
@@ -223,17 +262,50 @@ class CheapLLMClassifier:
             else:
                 return self._default_result()
             
-            if content is None:
+            if content is None or not content.strip():
                 return self._default_result()
             
-            # Parse JSON response
-            result = json.loads(content)
+            # Parse JSON response — handle models that wrap JSON in markdown
+            result = _parse_json_content(content)
+            if result is None:
+                return self._default_result()
             return self._validate_result(result)
             
         except Exception as e:
             print(f"[CheapLLMClassifier Error] {e}")
             return self._default_result()
     
+    @staticmethod
+    def _parse_json_content(content: str) -> dict | None:
+        """
+        Attempt to parse JSON from model output.
+        Handles markdown code blocks and extra text around JSON.
+        Returns None if no valid JSON can be extracted.
+        """
+        content = content.strip()
+
+        # Try direct parse first
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+
+        # Try extracting from markdown code blocks
+        json_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        # Try finding first { ... } block
+        brace_match = re.search(r'\{[\s\S]*\}', content)
+        if brace_match:
+            try:
+                return json.loads(brace_match.group())
+            except json.JSONDecodeError:
+                pass
+
     def _default_result(self) -> Dict:
         return {
             "fit_score": 50,
@@ -350,6 +422,9 @@ class StrongLLMReranker:
                     if content is None:
                         content = str(first_block)
             elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
+                kwa = {}
+                if self.provider != "lm_studio":
+                    kwa["response_format"] = {"type": "json_object"}
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
                     messages=[
@@ -357,7 +432,7 @@ class StrongLLMReranker:
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.1,
-                    response_format={"type": "json_object"}
+                    **kwa
                 )
                 usage_tracker.record_from_response(
                     provider=self.provider, model=self.model or "unknown",
@@ -383,10 +458,12 @@ class StrongLLMReranker:
             else:
                 return self._default_result()
             
-            if content is None:
+            if content is None or not content.strip():
                 return self._default_result()
             
-            result = json.loads(content) # type: ignore
+            result = _parse_json_content(content)
+            if result is None:
+                return self._default_result()
             return self._validate_result(result)
             
         except Exception as e:
@@ -468,7 +545,7 @@ class FinalApplicationQueue:
         salary = self._parse_salary_score(job.get('features', {}).get('pay', ''))
 
         # Remote factor
-        work_type = job.get('features', {}).get('work_type', '').lower()
+        work_type = (job.get('features', {}).get('work_type') or '').lower()
         remote = 100 if 'remote' in work_type else 50
 
         score = (
@@ -583,9 +660,12 @@ class FinalApplicationQueue:
         
         # Top 5 jobs for display
         for job in ranked_jobs[:5]:
+            metadata = job.get('metadata', {})
             summary["top_5_jobs"].append({
+                "job_id": metadata.get('job_id', 'Unknown'),
+                "link": metadata.get('link', ''),
                 "title": job.get('features', {}).get('title', 'Unknown'),
-                "company": job.get('metadata', {}).get('source', 'Unknown'),
+                "company": metadata.get('company_name', metadata.get('source', 'Unknown')),
                 "final_score": round(job.get('final_score', 0), 1),
                 "priority": job.get('priority', 'unknown'),
                 "semantic_score": round(job.get('semantic_score', 0) * 100, 1),
@@ -668,6 +748,7 @@ async def process_stage_8(jobs: List[Dict]) -> List[Dict]:
     print(f"\n=== TOP 5 JOBS TO APPLY ===")
     for i, job in enumerate(summary['top_5_jobs'], 1):
         print(f"{i}. {job['title']} at {job['company']}")
+        print(f"   Job ID: {job['job_id']} | Link: {job['link']}")
         print(f"   Final Score: {job['final_score']} | Priority: {job['priority']}")
         print(f"   Semantic: {job['semantic_score']}% | Cheap LLM: {job['cheap_llm_score']} | Strong LLM: {job['strong_llm_score']}")
     

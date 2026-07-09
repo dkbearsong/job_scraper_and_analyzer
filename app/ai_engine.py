@@ -25,6 +25,20 @@ class BaseAIProvider(ABC):
         """Generates a vector embedding for the given text."""
         pass
 
+    def load_model(self) -> None:
+        """
+        Load the LLM model into memory.
+        Default no-op — override in providers that support dynamic loading/unloading.
+        """
+        pass
+
+    def unload_model(self) -> None:
+        """
+        Unload / release the LLM model from memory.
+        Default no-op — override in providers that support dynamic loading/unloading.
+        """
+        pass
+
 # This is our shared prompt template to ensure consistency across all providers
 SYSTEM_PROMPT = """
 You are an expert recruitment assistant. Your task is to analyze a job description and extract key information for a high-precision matching system.
@@ -234,10 +248,185 @@ class OpenRouterProvider(BaseAIProvider):
 class LMStudioProvider(BaseAIProvider):
     """Local provider using LM Studio's OpenAI-compatible local server."""
     def __init__(self, base_url="http://localhost", port='1234', api_key="lm-studio", extraction_model="local-model", embeddings_model="local-model"):
-        self.client = OpenAI(base_url=f'{base_url}:{port}/v1', api_key=api_key)
+        self.base_url = base_url
+        self.port = port
+        self._api_base = f'{base_url}:{port}/v1'
+        self.client = OpenAI(base_url=self._api_base, api_key=api_key)
         self._provider_name = "lm_studio"
         self.extraction_model = extraction_model
         self.embeddings_model = embeddings_model
+        self._model_loaded = False
+        # Import requests here so the module can be used without requests installed
+        import requests as _req
+        self._http = _req
+
+    def _get_loaded_model_ids(self) -> list:
+        urls = [
+            f"{self.base_url}:{self.port}/api/v1/models",
+            f"{self._api_base}/models"
+        ]
+        for url in urls:
+            try:
+                resp = self._http.get(url, timeout=5)
+                if resp.status_code == 200:
+                    models = resp.json().get("data", [])
+                    return [m.get("id") for m in models if m.get("id")]
+            except Exception:
+                pass
+        return []
+
+    def _load_single_model(self, model_name: str) -> None:
+        if not model_name:
+            return
+
+        # ── Clear existing models from memory first ──
+        loaded_ids = self._get_loaded_model_ids()
+        if loaded_ids:
+            if len(loaded_ids) == 1 and loaded_ids[0] == model_name:
+                print(f"[LM Studio] Model '{model_name}' is already loaded and is the only model. Skipping clear/load.")
+                return
+
+            print(f"[LM Studio] Clearing existing model(s) from memory: {loaded_ids}")
+            for m_id in loaded_ids:
+                self._unload_single_model(m_id)
+
+            # Wait for all models to unload
+            import time
+            poll_interval = 2
+            deadline = time.time() + 45
+            unloaded_all = False
+            while time.time() < deadline:
+                current_loaded = self._get_loaded_model_ids()
+                if not current_loaded:
+                    print("[LM Studio] All models successfully unloaded.")
+                    unloaded_all = True
+                    break
+                time.sleep(poll_interval)
+            
+            if not unloaded_all:
+                print("[LM Studio] Warning: Some models did not unload within 45 seconds. Attempting to proceed anyway.")
+
+        print(f"[LM Studio] Loading model '{model_name}' ...")
+        urls = [
+            f"{self.base_url}:{self.port}/api/v1/models/load",
+            f"{self._api_base}/models/load"
+        ]
+        success = False
+        last_err = None
+        for url in urls:
+            try:
+                resp = self._http.post(
+                    url,
+                    json={
+                        "model": model_name
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    print(f"[LM Studio] Model '{model_name}' load request accepted via {url}.")
+                    success = True
+                    break
+                else:
+                    last_err = f"HTTP {resp.status_code}: {resp.text}"
+            except Exception as e:
+                last_err = str(e)
+        if not success:
+            print(f"[LM Studio] Error/Warning sending load request for '{model_name}': {last_err}")
+
+    def _unload_single_model(self, model_name: str) -> None:
+        if not model_name:
+            return
+        print(f"[LM Studio] Unloading model '{model_name}' ...")
+        urls = [
+            f"{self.base_url}:{self.port}/api/v1/models/unload",
+            f"{self._api_base}/models/unload"
+        ]
+        success = False
+        last_err = None
+        for url in urls:
+            try:
+                resp = self._http.post(
+                    url,
+                    json={
+                        "instance_id": model_name
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    print(f"[LM Studio] Model '{model_name}' unload request accepted via {url}.")
+                    success = True
+                    break
+                else:
+                    last_err = f"HTTP {resp.status_code}: {resp.text}"
+            except Exception as e:
+                last_err = str(e)
+        if not success:
+            print(f"[LM Studio] Error/Warning sending unload request for '{model_name}': {last_err}")
+
+    def load_model(self) -> None:
+        """
+        Load the extraction model into LM Studio via its HTTP API.
+        """
+        self._load_single_model(self.extraction_model)
+        self._model_loaded = True
+
+    def unload_model(self) -> None:
+        """
+        Unload the extraction model from LM Studio memory via its HTTP API.
+        """
+        self._unload_single_model(self.extraction_model)
+        self._model_loaded = False
+
+    def wait_for_model_loaded(self, timeout: int = 360, poll_interval: int = 5) -> bool:
+        """
+        Poll LM Studio's models endpoint until the extraction model appears
+        as loaded, or until *timeout* seconds have elapsed.
+        """
+        import time
+        model_name = self.extraction_model
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            loaded_ids = self._get_loaded_model_ids()
+            if model_name in loaded_ids:
+                print(f"[LM Studio] Model '{model_name}' is now loaded and ready.")
+                self._model_loaded = True
+                return True
+            time.sleep(poll_interval)
+        print(f"[LM Studio] Timeout waiting for model '{model_name}' after {timeout}s.")
+        return False
+
+    def load_model_by_name(self, model_name: str) -> None:
+        self._load_single_model(model_name)
+
+    def unload_model_by_name(self, model_name: str) -> None:
+        self._unload_single_model(model_name)
+
+    def wait_for_model_loaded_by_name(self, model_name: str, timeout: int = 180, poll_interval: int = 5) -> bool:
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            loaded_ids = self._get_loaded_model_ids()
+            if model_name in loaded_ids:
+                print(f"[LM Studio] Model '{model_name}' is loaded and ready.")
+                return True
+            time.sleep(poll_interval)
+        print(f"[LM Studio] Timeout waiting for model '{model_name}' after {timeout}s.")
+        return False
+
+    def wait_for_model_unloaded_by_name(self, model_name: str, timeout: int = 180, poll_interval: int = 5) -> bool:
+        import time
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            loaded_ids = self._get_loaded_model_ids()
+            if model_name not in loaded_ids:
+                print(f"[LM Studio] Model '{model_name}' has been successfully unloaded.")
+                return True
+            print(f"[LM Studio] Waiting for model '{model_name}' to unload ...")
+            time.sleep(poll_interval)
+        print(f"[LM Studio] Timeout waiting for model '{model_name}' to unload after {timeout}s.")
+        return False
+
+
 
     def extract_structured_data(self, text: str) -> dict:
         try:
@@ -246,8 +435,7 @@ class LMStudioProvider(BaseAIProvider):
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
-                ],
-                response_format={"type": "json_object"}
+                ]
             )
             usage_tracker.record_from_response(
                 provider=self._provider_name, model=self.extraction_model,
@@ -263,17 +451,34 @@ class LMStudioProvider(BaseAIProvider):
             return {"skills": [], "summary": ""}
 
     def generate_embedding(self, text: str) -> list:
+        """
+        Generate an embedding via LM Studio's /v1/embeddings endpoint.
+        Uses raw HTTP requests so we can control the payload format regardless
+        of which model is currently loaded in the server.
+        """
+        url = f"{self.base_url}:{self.port}/v1/embeddings"
+        if self.embeddings_model:
+            model_name = self.embeddings_model
+        else:
+            model_name = "local-model"
+        payload = {
+            "model": model_name,
+            "input": text
+        }
         try:
-            response = self.client.embeddings.create(
-                input=text,
-                model=self.embeddings_model
-            )
+            resp = self._http.post(url, json=payload, timeout=120)
+            if resp.status_code != 200:
+                print(f"[LM Studio Embedding Error] HTTP {resp.status_code}: {resp.text[:500]}")
+                return []
+            data = resp.json()
+            embedding = data["data"][0]["embedding"]
+            # record usage via the response dictionary to extract actual tokens if present
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=self.embeddings_model,
-                operation="embedding", response=response,
+                provider=self._provider_name, model=model_name,
+                operation="embedding", response=data,
                 context=f"generate_embedding ({len(text)} chars)"
             )
-            return response.data[0].embedding
+            return embedding
         except Exception as e:
             print(f"[LM Studio Embedding Error] {e}")
             return []
@@ -331,3 +536,69 @@ class AIEngine:
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         return provider.generate_embedding(text)
+
+    def load_model(self, provider_name: str | None = None, model_name: str | None = None) -> None:
+        """
+        Instruct the provider to load its model into memory.
+        For LM Studio this sends a load request to the local server.
+        Other providers treat this as a no-op.
+        """
+        target = provider_name if provider_name else self.default_provider_name
+        provider = self._get_provider(target)
+        if isinstance(provider, LMStudioProvider) and model_name:
+            provider.load_model_by_name(model_name)
+        else:
+            provider.load_model()
+
+    def unload_model(self, provider_name: str | None = None, model_name: str | None = None) -> None:
+        """
+        Instruct the provider to unload its model from memory.
+        For LM Studio this sends an unload request to the local server.
+        Other providers treat this as a no-op.
+        """
+        target = provider_name if provider_name else self.default_provider_name
+        provider = self._get_provider(target)
+        if isinstance(provider, LMStudioProvider) and model_name:
+            provider.unload_model_by_name(model_name)
+        else:
+            provider.unload_model()
+
+    def wait_for_model_loaded(self, provider_name: str | None = None,
+                               timeout: int = 180, poll_interval: int = 5,
+                               model_name: str | None = None) -> bool:
+        """
+        Wait for the provider's model to become available / ready.
+        For LM Studio this polls the /v1/models endpoint.
+
+        Args:
+            provider_name: Provider to check. Defaults to the engine's default.
+            timeout: Maximum seconds to wait.
+            poll_interval: Seconds between polls.
+            model_name: Optional specific model to wait for.
+
+        Returns:
+            True if model became available, False otherwise.
+        """
+        target = provider_name if provider_name else self.default_provider_name
+        provider = self._get_provider(target)
+        # Only LMStudioProvider has this method — others always return True
+        if isinstance(provider, LMStudioProvider):
+            if model_name:
+                return provider.wait_for_model_loaded_by_name(model_name, timeout=timeout, poll_interval=poll_interval)
+            return provider.wait_for_model_loaded(timeout=timeout, poll_interval=poll_interval)
+        return True
+
+    def wait_for_model_unloaded(self, provider_name: str | None = None,
+                                 timeout: int = 180, poll_interval: int = 5,
+                                 model_name: str | None = None) -> bool:
+        """
+        Wait for the provider's model to become unloaded / released.
+        For LM Studio this polls the /v1/models endpoint.
+        """
+        target = provider_name if provider_name else self.default_provider_name
+        provider = self._get_provider(target)
+        if isinstance(provider, LMStudioProvider):
+            target_model = model_name or provider.extraction_model
+            if target_model:
+                return provider.wait_for_model_unloaded_by_name(target_model, timeout=timeout, poll_interval=poll_interval)
+        return True

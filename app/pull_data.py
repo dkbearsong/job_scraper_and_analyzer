@@ -2,6 +2,7 @@ import aiohttp
 import json
 import asyncio
 import os
+import logging
 import csv
 import time
 import yaml
@@ -28,11 +29,34 @@ class DataPuller:
         if self.conn.database_exists(self.dbname) == False:
             make_db()
             self.conn.connect(self.dbname)
+        
+        # Check and run automatic schema migration if columns don't exist
+        try:
+            self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS skills JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS responsibilities JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS description TEXT", dbname=self.dbname)
+            
+            create_token_usage_sql = """
+            CREATE TABLE IF NOT EXISTS token_usage_log (
+                id SERIAL PRIMARY KEY,
+                run_id VARCHAR(100) NOT NULL,
+                run_timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                provider VARCHAR(100) NOT NULL,
+                model VARCHAR(100) NOT NULL,
+                operation VARCHAR(100) NOT NULL,
+                input_tokens INTEGER NOT NULL,
+                output_tokens INTEGER NOT NULL,
+                total_tokens INTEGER NOT NULL
+            )
+            """
+            self.conn.execute_sql(create_token_usage_sql, dbname=self.dbname)
+        except Exception as e:
+            print(f"Warning: Could not automatically migrate schema or tables: {e}")
 
     async def pull_data(self, source: str, payload: dict = {}) -> dict:
         rand_time = 3 * random()
         time.sleep(payload.get('seconds', rand_time))
-        url = f"{ws_micro_host}:{ws_micro_port}/{source}/scrape"
+        url = f"http://{ws_micro_host}:{ws_micro_port}/{source}/scrape"
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload) as response:
                 data = await response.json()
@@ -60,10 +84,10 @@ class DataPuller:
     # Load pulled data into database
 
     async def scrape_data(self, payload:dict, api_method:str="extract"):
-        url = f"{ws_micro_host}:{ws_micro_port}/{api_method}"
+        url = f"http://{ws_micro_host}:{ws_micro_port}/{api_method}"
         # Allow overriding the microservice request timeout via env var
         try:
-            timeout_seconds = int(os.getenv("MICROSERVICE_TIMEOUT", "120"))
+            timeout_seconds = int(os.getenv("MICROSERVICE_TIMEOUT", "5000"))
         except (TypeError, ValueError):
             timeout_seconds = 120
         timeout = aiohttp.ClientTimeout(total=timeout_seconds)
@@ -96,11 +120,134 @@ class DataPuller:
             # propagate cancellation
             raise
         except asyncio.TimeoutError as e:
-            return {'status_code': 408, 'data': [], 'error': 'Request timed out', 'exception': str(e)}
+            return {'status_code': 408, 'data': [], 'error': 'Request timed out', 'exception': repr(e), 'url': url}
         except aiohttp.ClientError as e:
-            return {'status_code': 503, 'data': [], 'error': 'Client error', 'exception': str(e)}
+            # aiohttp.ClientConnectorError stores the real OS error in .os_error
+            os_err = getattr(e, 'os_error', None)
+            extra = f" | OS error: {os_err}" if os_err else ""
+            return {'status_code': 503, 'data': [], 'error': 'Client error', 'exception': repr(e) + extra, 'url': url}
         except Exception as e:
-            return {'status_code': 500, 'data': [], 'error': 'Unexpected error', 'exception': str(e)}
+            return {'status_code': 500, 'data': [], 'error': 'Unexpected error', 'exception': repr(e), 'url': url}
+
+    async def generate_and_test_strategy(self, destination_link: str, job_id: int, domain_name: str) -> bool:
+        """
+        Generates a scraping strategy using the 'generate-strategy' endpoint.
+        Tests the strategy using the destination link.
+        If it fails, runs generate-strategy again with thinking=True and tests.
+        Saves to job_page_strategy/<domain_name>.json if successful.
+        Logs to app_error.log if it fails.
+        Returns True if successful, False otherwise.
+        """
+        os.makedirs("job_page_strategy", exist_ok=True)
+        
+        async def call_generate(thinking: bool):
+            url = f"http://{ws_micro_host}:{ws_micro_port}/generate-strategy"
+            payload = {
+                "url": destination_link,
+                "instructions": "Extract the job description",
+                "is_paginated": False,
+                "thinking": thinking
+            }
+            timeout = aiohttp.ClientTimeout(total=240)
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload) as response:
+                        if response.status == 200:
+                            return await response.json()
+            except Exception as e:
+                print(f"Error calling generate-strategy (thinking={thinking}): {e}")
+            return None
+
+        async def test_strategy(strategy_json) -> bool:
+            test_payload = dict(strategy_json)
+            test_payload["url"] = destination_link
+            
+            api_method = "extract-js" if test_payload.get("js_config") is not None else "extract"
+            try:
+                result = await self.scrape_data(test_payload, api_method=api_method)
+                if result.get("status_code") == 200 and result.get("data"):
+                    data_result = result["data"]
+                    if isinstance(data_result, list) and len(data_result) > 0:
+                        desc_key = next(
+                            (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
+                             if data_result[0].get(k)),
+                            None
+                        )
+                        if desc_key:
+                            desc_text = data_result[0].get(desc_key, "")
+                        else:
+                            desc_text = next(
+                                (v for v in data_result[0].values()
+                                 if isinstance(v, str) and len(v) > 50),
+                                ""
+                            )
+                        if desc_text and len(desc_text) > 50:
+                            return True
+            except Exception as e:
+                print(f"Error testing strategy: {e}")
+            return False
+
+        # Try with thinking=False first
+        resp = await call_generate(thinking=False)
+        strategy_obj = None
+        if resp and resp.get("success") and "strategy" in resp:
+            strategy_data = resp["strategy"]
+            selectors = resp.get("selectors") or strategy_data.get("selectors")
+            js_config = strategy_data.get("js_config")
+            
+            strategy_obj = {
+                "url": "{url}",
+                "strategy": strategy_data.get("strategy"),
+                "selectors": selectors
+            }
+            if js_config:
+                strategy_obj["js_config"] = js_config
+            
+            if await test_strategy(strategy_obj):
+                strategy_path = os.path.join("job_page_strategy", f"{domain_name}.json")
+                with open(strategy_path, "w", encoding="utf-8") as f:
+                    json.dump(strategy_obj, f, indent=4)
+                print(f"Successfully generated and saved strategy for {domain_name} using thinking=False")
+                return True
+
+        # If thinking=False failed or test failed, retry with thinking=True
+        print(f"Strategy generation with thinking=False failed or test failed for {domain_name}. Retrying with thinking=True...")
+        resp = await call_generate(thinking=True)
+        if resp and resp.get("success") and "strategy" in resp:
+            strategy_data = resp["strategy"]
+            selectors = resp.get("selectors") or strategy_data.get("selectors")
+            js_config = strategy_data.get("js_config")
+            
+            strategy_obj = {
+                "url": "{url}",
+                "strategy": strategy_data.get("strategy"),
+                "selectors": selectors
+            }
+            if js_config:
+                strategy_obj["js_config"] = js_config
+            
+            if await test_strategy(strategy_obj):
+                strategy_path = os.path.join("job_page_strategy", f"{domain_name}.json")
+                with open(strategy_path, "w", encoding="utf-8") as f:
+                    json.dump(strategy_obj, f, indent=4)
+                print(f"Successfully generated and saved strategy for {domain_name} using thinking=True")
+                return True
+
+        # Both failed. Log error.
+        error_msg = (
+            f"[MANUAL INTERVENTION NEEDED] Generated strategies did not work. "
+            f"Link: {destination_link}, Job ID: {job_id}, Domain: {domain_name}"
+        )
+        print(error_msg)
+        logging.error(error_msg)
+        try:
+            os.makedirs("logs", exist_ok=True)
+            with open(os.path.join("logs", "app_error.log"), "a", encoding="utf-8") as f:
+                import datetime
+                f.write(f"{datetime.datetime.now().isoformat()}:ERROR:{error_msg}\n")
+        except Exception:
+            pass
+        return False
 
     def load_scraped_data_to_db(self, data: list):
         '''
@@ -160,8 +307,11 @@ class DataPuller:
             """
             rows = self.conn.execute_sql(query, (item['title'], company_id, office_id), fetch=True)
             if rows:
-                # print(f"Rows found: {rows}")
-                continue  # Skip duplicate
+                # Get the ID of the existing duplicate job
+                existing_row = rows[0]
+                existing_id = existing_row.get("id") if isinstance(existing_row, dict) else existing_row[0]
+                item['id'] = existing_id
+                continue  # Skip duplicate but assign ID
             
             # print(f"item source: {item['source']}")
 
@@ -180,9 +330,11 @@ class DataPuller:
                 insert_data['job_summary'] = item['description']
 
             if 'pay' in item:
-                insert_data['pay'] = item['pay']
+                insert_data['pay_range'] = item['pay']
 
-            self.conn.insert("job", insert_data)
+            job_res = self.conn.insert("job", insert_data, returning=["id"])
+            if job_res and isinstance(job_res, (list, tuple)) and len(job_res) > 0 and len(job_res[0]) > 0:
+                item['id'] = job_res[0][0]
 
         return
 
@@ -215,12 +367,7 @@ class DataPuller:
         """Updates the 'is_skipped' column for a list of job IDs."""
         if not job_ids:
             return
-        up = {
-            "table": "job",
-            "set_values": {'skip' : 'True'},
-            "where": {"id": job_ids}
-        }
-        self.conn.update(up['table'], up['set_values'], up['where'], self.dbname)
+        self.conn.update("job", {'skip': 'True'}, {"id": job_ids}, dbname=self.dbname)
 
         return
     
@@ -250,17 +397,30 @@ class DataPuller:
             # Check timezone
             if update_data.get('timezone') is not None and update_data['timezone'] != "":
                 set_values["timezone"] = update_data.get('timezone')
+
+            # Check description (which holds LLM summary)
+            if update_data.get('description') is not None and update_data['description'] != "":
+                set_values["description"] = update_data.get('description')
+
+            # Check skills (store list as JSON string)
+            if update_data.get('skills') is not None:
+                set_values["skills"] = json.dumps(update_data.get('skills'))
+
+            # Check responsibilities (store list as JSON string)
+            if update_data.get('responsibilities') is not None:
+                set_values["responsibilities"] = json.dumps(update_data.get('responsibilities'))
             
             # Only perform update if there are fields to set
             if set_values:
                 where_clause = {"id": update_data.get('id')}
                 
                 # Use the existing update method from PostgresManager
-                self.conn.update("job", set_values, where_clause, self.dbname)
+                self.conn.update("job", set_values, where_clause, dbname=self.dbname)
 
     def save_job_embeddings(self, embedding_updates: list):
         """
         Saves generated job embeddings to the 'job_embeddings' table.
+        Uses UPSERT to update existing embeddings if job_id already exists.
         
         Args:
             embedding_updates: List of dictionaries containing job_id and embedding data.
@@ -270,7 +430,7 @@ class DataPuller:
             if not job_id:
                 continue
 
-            # Map data to table columns as specified in the Stage 4 requirements
+            # Map data to table columns, defaulting to None for missing fields
             insert_data = {
                 "job_id": job_id,
                 "title_embedding": data.get("title_embedding"),
@@ -279,11 +439,23 @@ class DataPuller:
                 "description_embedding": data.get("description_embedding")
             }
 
-            # Filter out keys with None values to ensure clean insertion
-            insert_data = {k: v for k, v in insert_data.items() if v is not None}
-
-            # Insert into database using the established PostgresManager instance
-            self.conn.insert("job_embeddings", insert_data, dbname=self.dbname)
+            # Use raw SQL with ON CONFLICT to handle duplicate job_ids
+            upsert_sql = """
+                INSERT INTO job_embeddings (job_id, title_embedding, skills_embedding, responsibilities_embedding, description_embedding)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (job_id) DO UPDATE SET
+                    title_embedding = COALESCE(EXCLUDED.title_embedding, job_embeddings.title_embedding),
+                    skills_embedding = COALESCE(EXCLUDED.skills_embedding, job_embeddings.skills_embedding),
+                    responsibilities_embedding = COALESCE(EXCLUDED.responsibilities_embedding, job_embeddings.responsibilities_embedding),
+                    description_embedding = COALESCE(EXCLUDED.description_embedding, job_embeddings.description_embedding)
+            """
+            self.conn.execute_sql(upsert_sql, params=(
+                job_id,
+                data.get("title_embedding"),
+                data.get("skills_embedding"),
+                data.get("responsibilities_embedding"),
+                data.get("description_embedding")
+            ), dbname=self.dbname)
 
     def bulk_create_table(self, create_sql: str, table_name: str = ""):
         """Creates a table if it doesn't exist using the established connection."""
@@ -330,6 +502,26 @@ class DataPuller:
                 job.get('responsibility_similarity', 0),
                 job.get('adjusted_score', 0),
                 rank
+            ), dbname=self.dbname)
+
+    def save_token_usage(self, run_id: str, run_timestamp, records: list):
+        """Saves LLM token usage records for a run to the database."""
+        if not records:
+            return
+        for r in records:
+            insert_sql = """
+            INSERT INTO token_usage_log (run_id, run_timestamp, provider, model, operation, input_tokens, output_tokens, total_tokens)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            self.conn.execute_sql(insert_sql, params=(
+                run_id,
+                run_timestamp,
+                r.provider,
+                r.model,
+                r.operation,
+                r.input_tokens,
+                r.output_tokens,
+                r.total_tokens
             ), dbname=self.dbname)
 
     def save_cheap_llm_results(self, shortlisted_jobs: list):
@@ -445,8 +637,27 @@ class DataPuller:
         return None
 
     def save_archetype_embeddings(self, archetype_data: dict):
-        """Caches newly generated archetype embeddings."""
-        self.conn.insert("archetype_embeddings", archetype_data, dbname=self.dbname)
+        """Caches newly generated archetype embeddings, updating if they already exist."""
+        insert_sql = """
+            INSERT INTO archetype_embeddings (archetype_name, archetype_type, title_embedding,
+                                              skills_embedding, responsibilities_embedding, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (archetype_name) DO UPDATE SET
+                archetype_type = EXCLUDED.archetype_type,
+                title_embedding = EXCLUDED.title_embedding,
+                skills_embedding = EXCLUDED.skills_embedding,
+                responsibilities_embedding = EXCLUDED.responsibilities_embedding,
+                metadata = EXCLUDED.metadata,
+                date_generated = CURRENT_TIMESTAMP
+        """
+        self.conn.execute_sql(insert_sql, params=(
+            archetype_data['archetype_name'],
+            archetype_data['archetype_type'],
+            archetype_data['title_embedding'],
+            archetype_data['skills_embedding'],
+            archetype_data['responsibilities_embedding'],
+            archetype_data['metadata']
+        ), dbname=self.dbname)
 
 
 def main():

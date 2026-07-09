@@ -18,7 +18,10 @@ import os
 import random
 import re
 import time
-from typing import Any, Dict, List
+import glob
+from urllib.parse import urlparse
+from typing import Dict, List
+from datetime import datetime
 
 import pandas as pd
 from jobspy import scrape_jobs as _scrape_jobs
@@ -125,9 +128,24 @@ async def scrape_sites(
     )
     new_data["source"] = i["strategy"]["source"]
     if new_data["status_code"] != 200:
+        error_msg = new_data.get("error", "")
+        exception_msg = new_data.get("exception", "")
+        raw_text = new_data.get("raw", "")
+        target_url = new_data.get("url", "")
+        details_parts = []
+        if target_url:
+            details_parts.append(f"URL: {target_url}")
+        if error_msg:
+            details_parts.append(f"Error: {error_msg}")
+        if exception_msg:
+            details_parts.append(f"Exception: {exception_msg}")
+        if raw_text:
+            details_parts.append(f"Response body: {raw_text[:500]}")
+        if not details_parts:
+            details_parts.append("No error message provided.")
         print(
-            f"Scraping data failed. Error code {new_data['status_code']}. "
-            f"Error: {new_data.get('error', 'No error message provided.')}"
+            f"Scraping data failed. Status code {new_data['status_code']}. "
+            + " | ".join(details_parts)
         )
         return None
     if "data" not in new_data:
@@ -197,11 +215,20 @@ async def scrape_job_descriptions(
     ]
 
     jobs_with_descriptions = 0
+    skipped_jobs = []
     for idx, job in enumerate(jobs):
         job_url = job.get("url")
         if not job_url:
             if verbose:
                 print(f"  Job {idx + 1}/{len(jobs)}: No URL, skipping description scrape.")
+            log_entry = {
+                "id": job.get("id"),
+                "job_name": job.get("title") or "",
+                "company_name": job.get("company") or "",
+                "source": job.get("source") or "",
+                "date": datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
             continue
 
         if verbose:
@@ -235,13 +262,36 @@ async def scrape_job_descriptions(
         if description:
             job["description"] = description
             jobs_with_descriptions += 1
-        elif verbose:
-            print(f"    No description found for {job_url}")
+        else:
+            if verbose:
+                print(f"    No description found for {job_url}")
+            log_entry = {
+                "id": job.get("id"),
+                "job_name": job.get("title") or "",
+                "company_name": job.get("company") or "",
+                "source": job.get("source") or "",
+                "date": datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
 
         # Small delay between requests to avoid overwhelming the microservice
         time.sleep(random.uniform(0.5, 1.5))
 
-    print(f"Scraped descriptions for {jobs_with_descriptions}/{len(jobs)} jobs.")
+    if skipped_jobs:
+        log_filename = f"skipped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        log_filepath = os.path.join("logs", "skipped", log_filename)
+        try:
+            os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
+            with open(log_filepath, "w", encoding="utf-8") as f:
+                json.dump(skipped_jobs, f, indent=2)
+            print(f"Logged {len(skipped_jobs)} skipped job(s) to {log_filepath}")
+        except Exception as e:
+            print(f"Warning: failed to write skip log file '{log_filepath}': {e}")
+
+    # Remove jobs that don't have descriptions
+    jobs = [j for j in jobs if j.get("description")]
+
+    print(f"Scraped descriptions for {jobs_with_descriptions} jobs.")
     return jobs
 
 
@@ -285,7 +335,8 @@ async def scrape_job_descriptions_from_db(
     """
     Query the database for jobs missing descriptions (job_summary IS NULL),
     then for each one check if a job_page_strategy file exists for the source.
-    If it does, scrape the description using that strategy and update the DB record.
+    If not, dynamically generates and tests one.
+    Scrapes the description using that strategy and updates the DB record.
 
     Args:
         data: The in-memory list of scraped job dicts (to enrich with descriptions).
@@ -295,11 +346,16 @@ async def scrape_job_descriptions_from_db(
     Returns:
         The enriched data list with descriptions populated where possible.
     """
-    # Build a lookup: source -> (id, link) from DB for jobs missing descriptions
+    data = await _scrape_job_descriptions_from_db_impl(data, dp, verbose)
+    return data
+
+
+async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verbose: bool = False) -> list:
     query = """
-        SELECT j.id, j.link, j.source
+        SELECT j.id, j.link, j.source, j.job_name, c.company_name, j.date_added
         FROM job j
-        WHERE j.job_summary IS NULL
+        LEFT JOIN company c ON j.company_id = c.id
+        WHERE j.job_summary IS NULL AND (j.skip IS NULL OR j.skip = FALSE)
     """
     try:
         rows = dp.pull_data_db(query)
@@ -313,59 +369,143 @@ async def scrape_job_descriptions_from_db(
 
     jobs_without_desc = []
     for row in rows:
-        # rows returned as list of tuples or dicts; handle both
         if isinstance(row, dict):
             jobs_without_desc.append({
                 "db_id": row.get("id"),
                 "url": row.get("link"),
                 "source": row.get("source"),
+                "title": row.get("job_name"),
+                "company": row.get("company_name"),
+                "date": row.get("date_added"),
             })
         else:
-            # tuple: (id, link, source) in order of SELECT
             jobs_without_desc.append({
                 "db_id": row[0],
                 "url": row[1],
                 "source": row[2],
+                "title": row[3] if len(row) > 3 else "",
+                "company": row[4] if len(row) > 4 else "",
+                "date": row[5] if len(row) > 5 else None,
             })
 
     print(f"Found {len(jobs_without_desc)} jobs in DB missing descriptions.")
 
-    # Build a mapping from source name -> normalized source name (for file lookup)
-    # Source values in DB come from site_strategies/*.json "source" field.
-    # We check for a matching strategy file in job_page_strategy/ by source name.
     job_page_strategy_dir = "./job_page_strategy"
     if not os.path.isdir(job_page_strategy_dir):
         print(f"Warning: job_page_strategy directory not found at {job_page_strategy_dir}. Skipping DB description scraping.")
         return data
 
+    def find_strategy_file(source_name: str) -> str | None:
+        if not source_name:
+            return None
+        source_lower = source_name.lower()
+        for filepath in glob.glob(os.path.join(job_page_strategy_dir, "*.json")):
+            filename = os.path.basename(filepath)
+            name = filename[:-5].lower() # remove .json
+            # Exact match, e.g. "Dice" -> "Dice.json"
+            if name == source_lower:
+                return filepath
+            # Domain match, e.g. "Dice" -> "dice.com.json"
+            if "." in name:
+                domain_part = name.split('.')[0]
+                if domain_part == source_lower:
+                    return filepath
+            # Inverse domain match, e.g. "dice.com" -> "Dice.json"
+            if "." in source_lower:
+                source_domain_part = source_lower.split('.')[0]
+                if source_domain_part == name:
+                    return filepath
+        return None
+
     updated_count = 0
+    skipped_jobs = []
+    job_ids_to_skip = []
+
     for job in jobs_without_desc:
         db_id = job["db_id"]
         url = job["url"]
         source = job.get("source", "")
+        job_name = job.get("title", "")
+        company_name = job.get("company", "")
+        job_date = job.get("date")
 
         if not url:
             if verbose:
                 print(f"  DB job {db_id}: No URL, skipping.")
+            log_entry = {
+                "id": db_id,
+                "job_name": job_name,
+                "company_name": company_name,
+                "source": source,
+                "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
+            job_ids_to_skip.append(db_id)
+            data = [item for item in data if item.get("url") != url and item.get("link") != url]
             continue
 
         if not source:
             if verbose:
                 print(f"  DB job {db_id}: No source, skipping.")
+            log_entry = {
+                "id": db_id,
+                "job_name": job_name,
+                "company_name": company_name,
+                "source": source,
+                "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
+            job_ids_to_skip.append(db_id)
+            data = [item for item in data if item.get("url") != url and item.get("link") != url]
             continue
 
-        # Check if a job_page_strategy file exists for this source
-        strategy_path = os.path.join(job_page_strategy_dir, f"{source}.json")
-        if not os.path.exists(strategy_path):
-            if verbose:
-                print(f"  DB job {db_id}: No job_page_strategy for source '{source}', skipping.")
-            continue
+        # Look up strategy file matching the source
+        strategy_path = find_strategy_file(source)
+        if not strategy_path:
+            try:
+                parsed = urlparse(url)
+                domain = parsed.netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+            except Exception:
+                domain = source.lower()
+            
+            print(f"  No strategy file found for source '{source}'. Generating strategy for domain '{domain}' using {url}...")
+            # Call generation function
+            success = await dp.generate_and_test_strategy(destination_link=url, job_id=db_id, domain_name=domain)
+            if success:
+                strategy_path = find_strategy_file(source)
+                if not strategy_path:
+                    strategy_path = os.path.join(job_page_strategy_dir, f"{domain}.json")
+            else:
+                print(f"  Failed to generate a working strategy for DB job {db_id} ({url})")
+                log_entry = {
+                    "id": db_id,
+                    "job_name": job_name,
+                    "company_name": company_name,
+                    "source": source,
+                    "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                }
+                skipped_jobs.append(log_entry)
+                job_ids_to_skip.append(db_id)
+                data = [item for item in data if item.get("url") != url and item.get("link") != url]
+                continue
 
         try:
             with open(strategy_path, "r") as f:
                 strategy = json.load(f)
         except Exception as e:
             print(f"  Error loading strategy {strategy_path}: {e}")
+            log_entry = {
+                "id": db_id,
+                "job_name": job_name,
+                "company_name": company_name,
+                "source": source,
+                "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
+            job_ids_to_skip.append(db_id)
+            data = [item for item in data if item.get("url") != url and item.get("link") != url]
             continue
 
         if verbose:
@@ -373,9 +513,10 @@ async def scrape_job_descriptions_from_db(
 
         # Prepare the payload using the DB record's URL
         payload = dict(strategy)
-        # Replace the URL template placeholder with the actual job URL if needed
+    
         if payload.get("url") == "{url}":
             payload["url"] = url
+        print(f"JD payload URL: {payload['url']}")
 
         api_method = (
             "extract-js"
@@ -389,9 +530,9 @@ async def scrape_job_descriptions_from_db(
             if result.get("status_code") == 200 and result.get("data"):
                 data_result = result["data"]
                 if isinstance(data_result, list) and len(data_result) > 0:
-                    # Strategy may use 'description' or other custom selector field
+                    # Strategy may use 'description', 'summary', or custom selector fields
                     desc_key = next(
-                        (k for k in ("description", "summary", "job-summary")
+                        (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
                          if data_result[0].get(k)),
                         None
                     )
@@ -408,37 +549,229 @@ async def scrape_job_descriptions_from_db(
                         description = desc_text
         except Exception as e:
             print(f"  Error scraping description for DB job {db_id}: {e}")
-            continue
 
         if description:
-            # Update the DB record
             try:
                 dp.conn.update("job", {"job_summary": description}, {"id": db_id}, dbname=dp.dbname)
                 updated_count += 1
                 if verbose:
                     print(f"    Updated DB job {db_id} with description ({len(description)} chars)")
             except Exception as e:
-                print(f"    Failed to update DB job {db_id}: {e}")
+                print(f"    Failed to update DB record for job {db_id}: {e}")
 
             # Enrich the in-memory data list: match by URL
             for item in data:
                 if item.get("url") == url:
                     item["description"] = description
-                    break
         else:
             if verbose:
                 print(f"    No description found for DB job {db_id} ({url})")
+            log_entry = {
+                "id": db_id,
+                "job_name": job_name,
+                "company_name": company_name,
+                "source": source,
+                "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+            }
+            skipped_jobs.append(log_entry)
+            job_ids_to_skip.append(db_id)
+            data = [item for item in data if item.get("url") != url and item.get("link") != url]
 
         # Small delay between requests
         time.sleep(random.uniform(0.5, 1.5))
 
-    print(f"Scraped and saved descriptions for {updated_count}/{len(jobs_without_desc)} DB jobs.")
+    if job_ids_to_skip:
+        try:
+            dp.bulk_update_skip_status(job_ids_to_skip)
+            print(f"Set skip=True for {len(job_ids_to_skip)} job(s) in the database.")
+        except Exception as e:
+            print(f"Warning: failed to update skip status for jobs: {e}")
+
+    if skipped_jobs:
+        log_filename = f"skipped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        log_filepath = os.path.join("logs", "skipped", log_filename)
+        try:
+            os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
+            with open(log_filepath, "w", encoding="utf-8") as f:
+                json.dump(skipped_jobs, f, indent=2)
+            print(f"Logged {len(skipped_jobs)} skipped job(s) to {log_filepath}")
+        except Exception as e:
+            print(f"Warning: failed to write skip log file '{log_filepath}': {e}")
+
+    print(f"Scraped and saved descriptions for {updated_count}/{len(jobs_without_desc)} DB jobs. Skipped {len(skipped_jobs)} jobs.")
     return data
+
+
+async def _load_jobs_without_embeddings(dp: DataPuller, limit: int = 50) -> list:
+    """
+    Load jobs from the database that have descriptions but no embeddings yet.
+    Used as a fallback when scraping returns no jobs with descriptions.
+
+    Args:
+        dp: DataPuller instance for database access.
+        limit: Maximum number of jobs to load.
+
+    Returns:
+        List of job dicts in raw scraped format with descriptions populated.
+    """
+    query = """
+        SELECT j.id, j.job_name, c.company_name, j.link, j.job_summary,
+               j.source, j.date_added, j.flexibility,
+               o.city, o.state, o.location
+        FROM job j
+        JOIN company c ON j.company_id = c.id
+        LEFT JOIN job_embeddings je ON j.id = je.job_id
+        LEFT JOIN office o ON j.office_id = o.id
+        WHERE j.job_summary IS NOT NULL
+          AND j.skip IS NOT TRUE
+          AND je.job_id IS NULL
+        ORDER BY j.date_added DESC
+        LIMIT %s
+    """
+    try:
+        rows = dp.conn.execute_sql(query, (limit,), fetch=True)
+    except Exception as e:
+        print(f"Error querying DB for jobs without embeddings: {e}")
+        return []
+
+    if not rows:
+        print("No jobs found in DB missing embeddings.")
+        return []
+
+    jobs = []
+    for row in rows:
+        if isinstance(row, dict):
+            job = {
+                "id": row.get("id"),
+                "title": row.get("job_name"),
+                "company": row.get("company_name"),
+                "link": row.get("link"),
+                "url": row.get("link"),
+                "description": row.get("job_summary"),
+                "source": row.get("source"),
+                "date_added": row.get("date_added"),
+                "flexibility": row.get("flexibility", "NA"),
+                "city": row.get("city"),
+                "state": row.get("state"),
+                "location": row.get("location"),
+            }
+        else:
+            job = {
+                "id": row[0],
+                "title": row[1],
+                "company": row[2],
+                "link": row[3],
+                "url": row[3],
+                "description": row[4],
+                "source": row[5],
+                "date_added": row[6],
+                "flexibility": row[7] if len(row) > 7 else "NA",
+                "city": row[8] if len(row) > 8 else None,
+                "state": row[9] if len(row) > 9 else None,
+                "location": row[10] if len(row) > 10 else None,
+            }
+        jobs.append(job)
+
+    print(f"Loaded {len(jobs)} jobs from DB with descriptions but no embeddings.")
+    return jobs
+
+
+async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> list:
+    """
+    Remove jobs that did not get a description, set skip=True in the database,
+    and log them to a timestamped JSON log file.
+
+    Args:
+        results: List of scraped job dicts.
+        dp: DataPuller instance for database access.
+
+    Returns:
+        Filtered list of jobs that have descriptions.
+    """
+    missing_description_indices = [
+        idx for idx, job in enumerate(results)
+        if not job.get("description")
+    ]
+
+    if not missing_description_indices:
+        return results
+
+    skipped_jobs = []
+    job_ids_to_skip = []
+
+    lookup_query = """
+        SELECT j.id, j.job_name, c.company_name, j.source, j.date_added
+        FROM job j
+        JOIN company c ON j.company_id = c.id
+        WHERE j.link = %s
+    """
+
+    for idx in missing_description_indices:
+        job = results[idx]
+        link = job.get("link") or job.get("url") or ""
+        job_name = job.get("title") or ""
+        source = job.get("source") or ""
+        company_name = job.get("company") or ""
+
+        db_id = None
+        job_date = None
+        try:
+            rows = dp.conn.execute_sql(lookup_query, (link,), fetch=True)
+            if rows:
+                row = rows[0]
+                db_id = row.get("id") if isinstance(row, dict) else row[0]
+                if not company_name:
+                    company_name = row.get("company_name") if isinstance(row, dict) else row[2]
+                if not job_name:
+                    job_name = row.get("job_name") if isinstance(row, dict) else row[1]
+                if not source:
+                    source = row.get("source") if isinstance(row, dict) else row[3]
+                if isinstance(row, dict):
+                    job_date = row.get("date_added")
+                elif len(row) > 4:
+                    job_date = row[4]
+        except Exception as e:
+            print(f"Warning: failed to look up job in DB for link '{link}': {e}")
+
+        log_entry = {
+            "id": db_id,
+            "job_name": job_name,
+            "company_name": company_name,
+            "source": source,
+            "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+        }
+        skipped_jobs.append(log_entry)
+
+        if db_id is not None:
+            job_ids_to_skip.append(db_id)
+
+    if job_ids_to_skip:
+        try:
+            dp.bulk_update_skip_status(job_ids_to_skip)
+            print(f"Set skip=True for {len(job_ids_to_skip)} job(s) in the database.")
+        except Exception as e:
+            print(f"Warning: failed to update skip status for jobs: {e}")
+
+    log_filename = f"skipped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    log_filepath = os.path.join("logs", "skipped", log_filename)
+    try:
+        os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
+        with open(log_filepath, "w", encoding="utf-8") as f:
+            json.dump(skipped_jobs, f, indent=2)
+        print(f"Logged {len(skipped_jobs)} skipped job(s) to {log_filepath}")
+    except Exception as e:
+        print(f"Warning: failed to write skip log file '{log_filepath}': {e}")
+
+    for idx in sorted(missing_description_indices, reverse=True):
+        results.pop(idx)
+
+    return results
 
 
 async def _pipeline_stage_scrape_legacy(
     dp: DataPuller, user_preferences: dict, sites: dict, skip_db: bool, verbose: bool,
-    enable_part_b: bool = False
+    enable_part_b: bool = False, skip_part_a: bool = False,
+    db_limit: int = 50,
 ) -> List[Dict]:
     """
     Legacy (fallback) scraping path: hardcoded Part A + optional Part B.
@@ -458,6 +791,8 @@ async def _pipeline_stage_scrape_legacy(
         skip_db: If True, skip database persistence.
         verbose: If True, print detailed debug output.
         enable_part_b: If True, run Part B (job board scraping via JobSpy).
+        skip_part_a: If True, skip the company career-page scraping (site_strategies/)
+                     and jump straight to the description scraping step.
 
     Returns:
         Combined list of raw scraped job dicts from both parts.
@@ -467,70 +802,74 @@ async def _pipeline_stage_scrape_legacy(
     # ==========================================
     # PART A: Scrape from company career pages
     # ==========================================
-    print("--- Company Board Scraping ---")
-    site_strategies: list = []
     data: list = []
 
-    for i in range(len(sites.get("name", []))):
-        strategy_path = f"./site_strategies/{sites['name'][i]}.json"
-        if not os.path.exists(strategy_path):
-            print(f"Warning: strategy file not found: {strategy_path}")
-            continue
-        strategy = {
-            "company": sites["name"][i],
-            "site": sites["site"][i],
-            "strategy": dp.load_site_strategies(strategy_path),
-            "api_method": "",
-        }
-        strat = strategy["strategy"]
-        strategy["api_method"] = (
-            "extract-paginated"
-            if strat.get("pagination") is not None
-            else (
-                "extract-js"
-                if strat.get("js_config") is not None
-                else "extract"
-            )
-        )
-        if verbose:
-            print(
-                f"Company: {strategy['company']} | "
-                f"API method: {strategy['api_method']}"
-            )
-        site_strategies.append(strategy)
-    print(f"Loaded {len(site_strategies)} site strategies.")
+    if not skip_part_a:
+        print("--- Company Board Scraping ---")
+        site_strategies: list = []
 
-    for i in site_strategies:
-        company_url = i["strategy"].pop("company_url", None)
-        print(f"Scraping {i['company']}...")
-        if isinstance(i["strategy"]["url"], str):
-            d = await scrape_sites(i, company_url, dp)
-            if not d:
+        for i in range(len(sites.get("name", []))):
+            strategy_path = f"./site_strategies/{sites['name'][i]}.json"
+            if not os.path.exists(strategy_path):
+                print(f"Warning: strategy file not found: {strategy_path}")
                 continue
-            if isinstance(d, list):
-                data += d
-            else:
-                data.append(d)
-        elif isinstance(i["strategy"]["url"], list):
-            for j in i["strategy"]["url"]:
-                new_payload = i
-                new_payload["strategy"]["url"] = j
-                d = await scrape_sites(new_payload, company_url, dp)
+            strategy = {
+                "company": sites["name"][i],
+                "site": sites["site"][i],
+                "strategy": dp.load_site_strategies(strategy_path),
+                "api_method": "",
+            }
+            strat = strategy["strategy"]
+            strategy["api_method"] = (
+                "extract-paginated"
+                if strat.get("pagination") is not None
+                else (
+                    "extract-js"
+                    if strat.get("js_config") is not None
+                    else "extract"
+                )
+            )
+            if verbose:
+                print(
+                    f"Company: {strategy['company']} | "
+                    f"API method: {strategy['api_method']}"
+                )
+            site_strategies.append(strategy)
+        print(f"Loaded {len(site_strategies)} site strategies.")
+
+        for i in site_strategies:
+            company_url = i["strategy"].pop("company_url", None)
+            print(f"Scraping {i['company']}...")
+            if isinstance(i["strategy"]["url"], str):
+                d = await scrape_sites(i, company_url, dp)
                 if not d:
                     continue
                 if isinstance(d, list):
                     data += d
                 else:
                     data.append(d)
+            elif isinstance(i["strategy"]["url"], list):
+                for j in i["strategy"]["url"]:
+                    new_payload = i
+                    new_payload["strategy"]["url"] = j
+                    d = await scrape_sites(new_payload, company_url, dp)
+                    if not d:
+                        continue
+                    if isinstance(d, list):
+                        data += d
+                    else:
+                        data.append(d)
 
-    print(f"Total jobs scraped from company boards: {len(data)}")
+        print(f"Total jobs scraped from company boards: {len(data)}")
 
-    # ── Load jobs into the database first (before scraping descriptions) ──
-    if data and not skip_db:
-        print("--- Loading Jobs into Database ---")
-        dp.load_scraped_data_to_db(data)
-    elif not skip_db:
-        print("No company board jobs to load into DB.")
+        # ── Load jobs into the database first (before scraping descriptions) ──
+        if data and not skip_db:
+            print("--- Loading Jobs into Database ---")
+            dp.load_scraped_data_to_db(data)
+        elif not skip_db:
+            print("No company board jobs to load into DB.")
+    else:
+        print("--- Skipping Part A (company career-page scraping) ---")
 
     # ── Then scrape descriptions from DB for jobs that are missing them ──
     if not skip_db:
@@ -638,5 +977,21 @@ async def _pipeline_stage_scrape_legacy(
             dp.load_scraped_data_to_db(jobs)
     else:
         print("--- Job Board Scraping (Part B disabled — skipping) ---")
+
+    # ── Fallback: if no jobs have descriptions (or no jobs scraped at all), load from DB jobs missing embeddings ──
+    combined = data + jobs
+    if not skip_db and (not combined or not any(job.get("description") for job in combined)):
+        print("--- Fallback: no scraped jobs have descriptions; loading from DB ---")
+        db_jobs = await _load_jobs_without_embeddings(dp, limit=db_limit)
+        if db_jobs:
+            print(f"Loaded {len(db_jobs)} jobs from DB with descriptions but no embeddings.")
+            data = db_jobs
+            jobs = []
+
+    # ── Post-process: remove jobs without descriptions and log them ──
+    if not skip_db:
+        print("--- Post-processing: removing jobs without descriptions ---")
+        data = await _process_jobs_without_descriptions(data, dp)
+        jobs = await _process_jobs_without_descriptions(jobs, dp)
 
     return data + jobs

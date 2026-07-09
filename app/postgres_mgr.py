@@ -31,8 +31,15 @@ class PostgresManager:
             self._conn.close()
         params = dict(self.conn_params, dbname=target)
         params["port"] = str(params["port"])
+        # Add a connect_timeout (in seconds) so the UI does not hang forever
+        # when the database server is unreachable or slow.
+        params["connect_timeout"] = 10
         self._conn = psycopg2.connect(**params) # type: ignore
         self._conn.autocommit = False
+        # Set a statement timeout (in milliseconds) so that long-running
+        # SELECT queries do not freeze the event loop.
+        with self._conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 15000")  # 15 seconds
         return self._conn
 
     def close(self):
@@ -47,6 +54,20 @@ class PostgresManager:
         target = dbname or self.dbname or self.default_db
         if self._conn is None or self._conn.closed:
             self.connect(target)
+        elif self._conn is not None and not self._conn.closed:
+            # Verify the connection is actually alive — the server may have
+            # disconnected while we were idle (e.g. during long AI/LLM passes).
+            try:
+                with self._conn.cursor() as _ping_cur:
+                    _ping_cur.execute("SELECT 1")
+            except Exception:
+                # Connection is stale; force a reconnect.
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+                self.connect(target)
         if self._conn is None:
             raise RuntimeError("Failed to establish database connection.")
         return self._conn
@@ -56,7 +77,9 @@ class PostgresManager:
         Check whether a database exists.
         Must connect to default_db (usually 'postgres').
         """
-        temp_conn = psycopg2.connect(**dict(self.conn_params, dbname=self.default_db))  # type: ignore
+        params = dict(self.conn_params, dbname=self.default_db)
+        params["connect_timeout"] = 10  # fail fast if server unreachable
+        temp_conn = psycopg2.connect(**params)  # type: ignore
         temp_conn.autocommit = True
         try:
             with temp_conn.cursor() as cur:

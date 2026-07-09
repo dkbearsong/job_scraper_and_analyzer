@@ -70,7 +70,7 @@ def error_logger_continue(error_msg):
 # ── Pipeline Stats Logging ──
 
 def _setup_pipeline_stats_logger() -> logging.Logger:
-    """Configure and return a logger that writes pipeline stats to ``pipeline_stats.log``."""
+    """Configure and return a logger that writes pipeline stats to ``logs/pipeline_stats.log``."""
     logger = logging.getLogger("pipeline_stats")
     logger.setLevel(logging.INFO)
 
@@ -78,7 +78,8 @@ def _setup_pipeline_stats_logger() -> logging.Logger:
     if logger.handlers:
         return logger
 
-    handler = logging.FileHandler("pipeline_stats.log", mode="a", encoding="utf-8")
+    os.makedirs("logs", exist_ok=True)
+    handler = logging.FileHandler(os.path.join("logs", "pipeline_stats.log"), mode="a", encoding="utf-8")
     handler.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     handler.setFormatter(formatter)
@@ -139,30 +140,270 @@ def load_resume_as_text(type):
         full_text.append(para.text.strip())
     return "\n".join(full_text)
 
+import math
+import requests
+
+GEO_CACHE_FILE = "app/geocoding_cache.json"
+
+SEED_COORDINATES = {
+    "austin, tx": (30.2672, -97.7431),
+    "austin, texas": (30.2672, -97.7431),
+    "austin": (30.2672, -97.7431),
+    "austin area": (30.2672, -97.7431),
+    "seattle, wa": (47.6062, -122.3321),
+    "seattle, washington": (47.6062, -122.3321),
+    "seattle": (47.6062, -122.3321),
+    "seattle area": (47.6062, -122.3321),
+    "boston, ma": (42.3601, -71.0589),
+    "boston, massachusetts": (42.3601, -71.0589),
+    "boston": (42.3601, -71.0589),
+    "boston area": (42.3601, -71.0589),
+    "san francisco, ca": (37.7749, -122.4194),
+    "san francisco, california": (37.7749, -122.4194),
+    "san francisco": (37.7749, -122.4194),
+    "san francisco bay area": (37.7749, -122.4194),
+    "sf bay area": (37.7749, -122.4194),
+    "salt lake city, ut": (40.7608, -111.8910),
+    "salt lake city, utah": (40.7608, -111.8910),
+    "salt lake city": (40.7608, -111.8910),
+    "salt lake county": (40.7608, -111.8910),
+    "salt lake county, utah": (40.7608, -111.8910),
+    "new york, ny": (40.7128, -74.0060),
+    "new york, new york": (40.7128, -74.0060),
+    "new york": (40.7128, -74.0060),
+    "los angeles, ca": (34.0522, -118.2437),
+    "los angeles, california": (34.0522, -118.2437),
+    "los angeles": (34.0522, -118.2437),
+    "chicago, il": (41.8781, -87.6298),
+    "chicago, illinois": (41.8781, -87.6298),
+    "chicago": (41.8781, -87.6298),
+    "denver, co": (39.7392, -104.9903),
+    "denver, colorado": (39.7392, -104.9903),
+    "denver": (39.7392, -104.9903),
+    "atlanta, ga": (33.7490, -84.3880),
+    "atlanta, georgia": (33.7490, -84.3880),
+    "atlanta": (33.7490, -84.3880),
+    "remote": None,
+    "na": None,
+    "n/a": None
+}
+
+def load_geocoding_cache():
+    if os.path.exists(GEO_CACHE_FILE):
+        try:
+            with open(GEO_CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_geocoding_cache(cache):
+    try:
+        os.makedirs(os.path.dirname(GEO_CACHE_FILE), exist_ok=True)
+        with open(GEO_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+def geocode(location_str: str) -> Optional[Tuple[float, float]]:
+    if not location_str:
+        return None
+    loc_clean = location_str.strip().lower()
+    
+    # Check seed coordinates
+    if loc_clean in SEED_COORDINATES:
+        return SEED_COORDINATES[loc_clean]
+        
+    cache = load_geocoding_cache()
+    if loc_clean in cache:
+        cached = cache[loc_clean]
+        if cached:
+            return cached[0], cached[1]
+        return None
+
+    # Call Nominatim OSM API
+    headers = {"User-Agent": "JobScraperAnalyzer/1.0 (dbearsong@example.com)"}
+    url = "https://nominatim.openstreetmap.org/search"
+    params = {"q": location_str, "format": "json", "limit": 1}
+    try:
+        # Respect OpenStreetMap Nominatim request limit
+        time.sleep(1.0)
+        resp = requests.get(url, params=params, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data:
+                lat = float(data[0]["lat"])
+                lon = float(data[0]["lon"])
+                cache[loc_clean] = [lat, lon]
+                save_geocoding_cache(cache)
+                return lat, lon
+    except Exception as e:
+        print(f"Geocoding error for {location_str}: {e}")
+    
+    # Cache None to avoid repeated slow failures
+    cache[loc_clean] = None
+    save_geocoding_cache(cache)
+    return None
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 3958.8  # Earth radius in miles
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+    
+    a = math.sin(delta_phi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+def is_missing_value(val) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, str):
+        v = val.strip().lower()
+        return v in ("", "na", "n/a", "not specified", "none", "unknown", "n/a (us or canada only)")
+    return False
+
+def term_matches(pref: str, job_val: str) -> bool:
+    pref = pref.strip().lower()
+    job_val = job_val.strip().lower()
+    if not pref or not job_val:
+        return False
+        
+    # Check for quotation marks
+    is_quoted = (pref.startswith('"') and pref.endswith('"')) or (pref.startswith("'") and pref.endswith("'"))
+    if is_quoted:
+        clean_pref = pref[1:-1].strip()
+        return clean_pref in job_val
+    else:
+        # Partial match
+        if pref in job_val:
+            return True
+        # Word matches
+        pref_words = [w for w in re.split(r'[^a-zA-Z0-9\-\']', pref) if w]
+        job_words = [w for w in re.split(r'[^a-zA-Z0-9\-\']', job_val) if w]
+        for pw in pref_words:
+            if pw in job_words or any(pw in jw for jw in job_words):
+                return True
+        return False
+
+def extract_job_locations(job: dict) -> List[str]:
+    locs = []
+    features = job.get('features', {})
+    
+    # Try city, state first
+    city = features.get('city')
+    state = features.get('state')
+    if city and not is_missing_value(city):
+        if state and not is_missing_value(state):
+            locs.append(f"{city}, {state}")
+        else:
+            locs.append(city)
+            
+    # Try location
+    location = features.get('location')
+    if location and not is_missing_value(location):
+        for part in re.split(r'[;|/|\|]', location):
+            part_clean = part.strip()
+            if part_clean and not is_missing_value(part_clean):
+                locs.append(part_clean)
+                
+    # Deduplicate
+    seen = set()
+    deduped = []
+    for l in locs:
+        l_lower = l.lower()
+        if l_lower not in seen:
+            seen.add(l_lower)
+            deduped.append(l)
+    return deduped
+
+def check_location_proximity(job: dict, user_preferences: dict) -> bool:
+    """
+    Returns True if the job should be SKIPPED because it is outside the target city range.
+    Returns False if it is within range, or if location data is missing/invalid.
+    """
+    target_cities = user_preferences.get('target_cities', [])
+    if not target_cities:
+        return False
+        
+    # Check if work_type is remote
+    work_type = job.get('features', {}).get('work_type', '')
+    if isinstance(work_type, str) and 'remote' in work_type.lower():
+        return False
+        
+    job_locations = extract_job_locations(job)
+    if not job_locations:
+        return False
+        
+    # Check if any location contains "remote"
+    for loc in job_locations:
+        if 'remote' in loc.lower():
+            return False
+            
+    max_range = user_preferences.get('target_city_range', 25)
+    
+    geocoded_any = False
+    for target in target_cities:
+        target_clean = target.strip().lower()
+        
+        # Exact/substring match first to avoid slow geocoding
+        for loc in job_locations:
+            loc_clean = loc.strip().lower()
+            if target_clean in loc_clean or loc_clean in target_clean:
+                return False
+                
+        target_coords = geocode(target)
+        if not target_coords:
+            continue
+            
+        for loc in job_locations:
+            loc_coords = geocode(loc)
+            if loc_coords:
+                geocoded_any = True
+                dist = haversine_distance(target_coords[0], target_coords[1], loc_coords[0], loc_coords[1])
+                if dist <= max_range:
+                    return False
+                    
+    if geocoded_any:
+        return True
+    return False
+
 def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
     """
     Evaluates a job against hard constraints.
     Returns True if the job should be SKIPPED, False if it passes.
     """
-    job_work_type = job['features'].get('work_type', None)
-    if job_work_type:
-        job_work_type = job_work_type.lower()
-    user_work_types = [t.lower() for t in user_preferences.get('work_types', [])]
-    if user_work_types and job_work_type and job_work_type not in user_work_types:
-        return True
+    features = job.get('features', {})
 
-    job_seniority = job['features'].get('seniority', None)
-    if job_seniority:
-        job_seniority = job_seniority.lower()
-    user_seniority_levels = [s.lower() for s in user_preferences.get('seniority_levels', [])]
-    if user_seniority_levels and job_seniority and job_seniority not in user_seniority_levels:
-        return True
+    # 1. Work Type Filter
+    job_work_type = features.get('work_type')
+    user_work_types = user_preferences.get('work_types', [])
+    if user_work_types and not is_missing_value(job_work_type):
+        matched = False
+        for pref in user_work_types:
+            if term_matches(pref, job_work_type):
+                matched = True
+                break
+        if not matched:
+            return True
 
-    job_pay = job['features'].get('pay', "")
+    # 2. Seniority Filter
+    job_seniority = features.get('seniority')
+    user_seniority_levels = user_preferences.get('seniority_levels', [])
+    if user_seniority_levels and not is_missing_value(job_seniority):
+        matched = False
+        for pref in user_seniority_levels:
+            if term_matches(pref, job_seniority):
+                matched = True
+                break
+        if not matched:
+            return True
+
+    # 3. Pay Filter
+    job_pay = features.get('pay', "")
     target_pay_range = user_preferences.get('pay_range', '')
-    if not job_pay or job_pay == "Not Specified":
-        pass
-    else:
+    if not is_missing_value(job_pay):
         if target_pay_range and job_pay:
             try:
                 if filter_pay(target_pay_range, job_pay):
@@ -172,12 +413,19 @@ def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
                 pass
 
     # 4. Timezone Filter
-    job_timezone = job['features'].get('timezone', None)
-    if job_timezone:
-        job_timezone = job_timezone.lower()
-    user_timezones = [tz.lower() for tz in user_preferences.get('timezones', [])]
-    
-    if user_timezones and job_timezone and job_timezone not in user_timezones:
+    job_timezone = features.get('timezone')
+    user_timezones = user_preferences.get('timezones', [])
+    if user_timezones and not is_missing_value(job_timezone):
+        matched = False
+        for pref in user_timezones:
+            if term_matches(pref, job_timezone):
+                matched = True
+                break
+        if not matched:
+            return True
+
+    # 5. Cities/Proximity Filter
+    if check_location_proximity(job, user_preferences):
         return True
 
     return False
@@ -194,11 +442,13 @@ def filter_pay(target_pay_range, job_pay):
 
     job_min, job_max = None, None
     if isinstance(job_pay, str):
-        matches = re.findall(r'(\d+)(?:k|K)?', job_pay)
+        # Remove commas and strip decimal digits (e.g. $111,259.26 -> $111259)
+        job_pay_cleaned = re.sub(r'\.\d+', '', job_pay.replace(',', ''))
+        matches = re.findall(r'(\d+)(?:k|K)?', job_pay_cleaned)
         if matches:
-            job_min = int(matches[0]) * 1000 if 'k' in job_pay.lower() else int(matches[0])
+            job_min = int(matches[0]) * 1000 if 'k' in job_pay_cleaned.lower() else int(matches[0])
         if len(matches) >= 2:
-            job_max = int(matches[1]) * 1000 if 'k' in job_pay.lower() else int(matches[1])
+            job_max = int(matches[1]) * 1000 if 'k' in job_pay_cleaned.lower() else int(matches[1])
 
     if job_max is not None:
         if job_min is None:
@@ -213,6 +463,65 @@ def convert_pay(match, context):
     return val * 1000 if 'k' in context.lower() else val
 
 ##################################### AI Functions #############################################################################
+
+def _provider_is_lm_studio(ai: AIEngine, provider_name: str | None = None) -> bool:
+    """
+    Check whether the given (or default) provider is LM Studio.
+
+    Args:
+        ai: The AIEngine instance.
+        provider_name: Optional override; if None uses the engine's default.
+
+    Returns:
+        True if the resolved provider is LM Studio.
+    """
+    target = (provider_name or ai.default_provider_name).lower()
+    return target == "lm_studio"
+
+
+def _load_model_if_lm_studio(ai: AIEngine, provider_name: str | None = None,
+                              stage_label: str = "", model_name: str | None = None) -> None:
+    """
+    If the resolved provider is LM Studio, send a model load request and wait for
+    the model to become ready.  Does nothing for other providers.
+
+    Args:
+        ai: The AIEngine instance.
+        provider_name: Optional provider override.
+        stage_label: Human-readable label for log messages.
+        model_name: Optional model override.
+    """
+    if not _provider_is_lm_studio(ai, provider_name):
+        return
+    tag = f" [{stage_label}]" if stage_label else ""
+    print(f"[Model Mgmt]{tag} Loading LM Studio model ...")
+    ai.load_model(provider_name=provider_name, model_name=model_name)
+    loaded = ai.wait_for_model_loaded(provider_name=provider_name, model_name=model_name)
+    if not loaded:
+        print(f"[Model Mgmt]{tag} WARNING: model may not be fully loaded yet.")
+
+
+def _unload_model_if_lm_studio(ai: AIEngine, provider_name: str | None = None,
+                                stage_label: str = "", model_name: str | None = None) -> None:
+    """
+    If the resolved provider is LM Studio, send a model unload request and wait for
+    unloading to complete.  Does nothing for other providers.
+
+    Args:
+        ai: The AIEngine instance.
+        provider_name: Optional provider override.
+        stage_label: Human-readable label for log messages.
+        model_name: Optional model override.
+    """
+    if not _provider_is_lm_studio(ai, provider_name):
+        return
+    tag = f" [{stage_label}]" if stage_label else ""
+    print(f"[Model Mgmt]{tag} Unloading LM Studio model ...")
+    ai.unload_model(provider_name=provider_name, model_name=model_name)
+    unloaded = ai.wait_for_model_unloaded(provider_name=provider_name, model_name=model_name)
+    if not unloaded:
+        print(f"[Model Mgmt]{tag} WARNING: model may not be fully unloaded yet.")
+
 
 def call_llm_for_extraction(ai: AIEngine, text: str, provider_name: str | None = None) -> dict:
     """Uses the provided AI engine to extract structured data."""
@@ -365,12 +674,16 @@ async def pipeline_stage_setup(skip_db: bool = False, verbose: bool = False,
         print(f"Extracted {len(job_titles)} job titles: {job_titles}")
         print(f"---------------------------\n")
 
-    # Configure logging
-    logging.basicConfig(
-        filename='app_error.log',
-        level=logging.ERROR,
-        format='%(asctime)s:%(levelname)s:%(message)s'
-    )
+    # Configure logging if not already configured
+    root = logging.getLogger()
+    if not root.handlers:
+        os.makedirs("logs", exist_ok=True)
+        error_handler = logging.FileHandler(os.path.join("logs", "app_error.log"), mode="a", encoding="utf-8")
+        error_handler.setLevel(logging.ERROR)
+        error_formatter = logging.Formatter("%(asctime)s:%(levelname)s:%(message)s")
+        error_handler.setFormatter(error_formatter)
+        root.addHandler(error_handler)
+        root.setLevel(logging.ERROR)
 
     # Load user preferences
     prefs_yaml_path = os.getenv("USER_PREFERENCES_YAML", "")
@@ -433,6 +746,7 @@ def _normalize_to_pool_format(all_scraped: List[Dict]) -> List[Dict]:
             "metadata": {
                 "job_id": job_id,
                 "source": item.get('source', 'scraped'),
+                "in_db": 'id' in item,
             },
             "features": {
                 "title": item.get('title', ''),
@@ -441,6 +755,9 @@ def _normalize_to_pool_format(all_scraped: List[Dict]) -> List[Dict]:
                 "seniority": "NA",
                 "work_type": item.get('flexibility', 'NA'),
                 "timezone": "NA",
+                "location": item.get('location', 'NA'),
+                "city": item.get('city', 'NA'),
+                "state": item.get('state', 'NA'),
             },
             "embeddings": {
                 "description_vector": None,
@@ -475,7 +792,10 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
                                 verbose: bool = False,
                                 max_pages: Optional[int] = None,
                                 headless: bool = True,
-                                debug_logging: bool = False) -> List[Dict]:
+                                debug_logging: bool = False,
+                                skip_part_a: Optional[bool] = None,
+                                db_limit: int = 50,
+                                scrape_missing_24h: bool = False) -> List[Dict]:
     """
     Stage 1: Scrape jobs using the pluggable adapter system.
 
@@ -490,6 +810,9 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         max_pages: Override max_pages for all adapters (e.g. CLI --pages).
         headless: Override headless mode for all adapters (False = visible browser).
         debug_logging: If True, enable debug-level logging.
+        skip_part_a: If True, skip Part A in legacy fallback path.
+        db_limit: Max records to pull from DB in bulk-load fallback operations.
+        scrape_missing_24h: If True, only re-scrape descriptions for recent DB jobs.
 
     Returns:
         List[Dict] of scraped jobs in the 'processed_job_pool' format.
@@ -502,6 +825,15 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
     print("=" * 50)
     print("PIPELINE STAGE 1: SCRAPING")
     print("=" * 50)
+
+    if scrape_missing_24h:
+        print("[Stage 1] scrape_missing_24h is True. Running dedicated DB description re-scraping workflow...")
+        if skip_db:
+            print("[Stage 1] WARNING: skip_db is True, cannot run DB description re-scraping. Returning empty pool.")
+            return []
+        processed_job_pool = await scrape_missing_descriptions_24h(dp, verbose)
+        print(f"Stage 1 complete: {len(processed_job_pool)} jobs in pool.")
+        return processed_job_pool
 
     # Determine config path (check env var first, then default)
     scrapers_config_path = os.getenv("SCRAPERS_CONFIG", "scrapers_config.yaml")
@@ -541,14 +873,21 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         except Exception as e:
             print(f"Adapter system failed: {e}. Falling back to legacy scraping.")
 
-    # Read enable_fallback_part_b from user preferences
+    # Read enable_fallback_part_b and skip_part_a from user preferences
     enable_part_b = user_preferences.get("enable_fallback_part_b", False)
+    # CLI --skip-part-a overrides yaml value; if neither is set, default to False
+    resolved_skip_part_a = (
+        True
+        if skip_part_a is True
+        else bool(user_preferences.get("skip_part_a", False))
+    )
 
     # ── Fallback to legacy path if adapters didn't run ──
     if not used_adapters:
         all_scraped = await _pipeline_stage_scrape_legacy(
             dp, user_preferences, sites, skip_db, verbose,
-            enable_part_b=enable_part_b
+            enable_part_b=enable_part_b, skip_part_a=resolved_skip_part_a,
+            db_limit=db_limit,
         )
 
     # ── Also run fallback if explicitly configured to do so ──
@@ -556,13 +895,47 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         print("run_fallback_after_adapters is True — also running legacy fallback scraping...")
         fallback_jobs = await _pipeline_stage_scrape_legacy(
             dp, user_preferences, sites, skip_db, verbose,
-            enable_part_b=enable_part_b
+            enable_part_b=enable_part_b, skip_part_a=resolved_skip_part_a,
+            db_limit=db_limit,
         )
         if fallback_jobs:
-            print(f"Merging {len(fallback_jobs)} fallback jobs with {len(all_scraped)} adapter jobs.")
-            all_scraped.extend(fallback_jobs)
+            print(f"Merging {len(fallback_jobs)} fallback jobs with {len(all_scraped)} adapter jobs (deduplicating by link)...")
+            merged = {}
+            for job in all_scraped:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            for job in fallback_jobs:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            all_scraped = list(merged.values())
         else:
             print("Fallback scraping returned no jobs.")
+
+    # ── Fallback: if no jobs have descriptions, load from DB jobs missing embeddings ──
+    if all_scraped and not skip_db and not any(job.get("description") for job in all_scraped):
+        print("--- Fallback: no scraped jobs have descriptions; loading from DB ---")
+        from app.fallback_scraping_instructions import _load_jobs_without_embeddings
+        db_jobs = await _load_jobs_without_embeddings(dp, limit=db_limit)
+        if db_jobs:
+            print(f"Loaded {len(db_jobs)} jobs from DB with descriptions but no embeddings (deduplicating by link)...")
+            merged = {}
+            for job in all_scraped:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            for job in db_jobs:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            all_scraped = list(merged.values())
+
+    # ── Post-process: remove jobs without descriptions and log them ──
+    if all_scraped and not skip_db:
+        print("--- Post-processing: removing jobs without descriptions ---")
+        from app.fallback_scraping_instructions import _process_jobs_without_descriptions
+        all_scraped = await _process_jobs_without_descriptions(all_scraped, dp)
 
     # ── Convert raw scraped data to processed_job_pool format ──
     processed_job_pool = _normalize_to_pool_format(all_scraped)
@@ -632,6 +1005,8 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         title = raw_job.get('title', raw_job.get('job_name', ''))
         work_type = raw_job.get('flexibility', 'NA')
         pay = raw_job.get('pay', raw_job.get('pay_range', ''))
+        company_name = raw_job.get('company', raw_job.get('company_name', raw_job.get('metadata', {}).get('company_name', 'Unknown'))        )
+        link = raw_job.get('link', raw_job.get('url', raw_job.get('metadata', {}).get('link', '')))
 
         if not description or len(description) < 50:
             if verbose:
@@ -642,6 +1017,8 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             "metadata": {
                 "job_id": job_id,
                 "source": "scraped",
+                "company_name": company_name,
+                "link": link,
             },
             "features": {
                 "title": title,
@@ -660,11 +1037,20 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
 
     print(f"Successfully extracted data for {len(processed_job_pool)} jobs.")
 
-    # Second pass: LLM extraction + embedding generation
-    print(f"Starting AI/LLM Pass on {len(processed_job_pool)} jobs...")
+    # Second pass: LLM extraction
+    is_lm_studio_extraction = _provider_is_lm_studio(ai_engine, _extraction_llm)
+    if is_lm_studio_extraction:
+        extraction_model = ai_engine.extraction_model
+        print(f"[Model Mgmt] Loading LM Studio extraction model: {extraction_model} ...")
+        ai_engine.load_model(provider_name=_extraction_llm, model_name=extraction_model)
+        loaded = ai_engine.wait_for_model_loaded(provider_name=_extraction_llm, model_name=extraction_model)
+        if not loaded:
+            print("[Model Mgmt] WARNING: extraction model may not be fully loaded yet.")
+
+    print(f"Starting AI/LLM Extraction Pass on {len(processed_job_pool)} jobs...")
     for index, job in enumerate(processed_job_pool):
         if verbose:
-            print(f"Processing job {index + 1}/{len(processed_job_pool)}: {job['features']['title']}")
+            print(f"Extraction job {index + 1}/{len(processed_job_pool)}: {job['features']['title']}")
 
         if not job or 'features' not in job:
             error_logger_continue(f"Warning: job at index {index} has invalid structure")
@@ -700,35 +1086,72 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         features['skills'] = skills or []
         features['requirements'] = requirements or []
         features['summary'] = summary or ""
+        time.sleep(0.5)
+
+    if is_lm_studio_extraction:
+        extraction_model = ai_engine.extraction_model
+        print(f"[Model Mgmt] Unloading LM Studio extraction model: {extraction_model} ...")
+        ai_engine.unload_model(provider_name=_extraction_llm, model_name=extraction_model)
+        unloaded = ai_engine.wait_for_model_unloaded(provider_name=_extraction_llm, model_name=extraction_model)
+        if not unloaded:
+            print("[Model Mgmt] WARNING: extraction model may not be fully unloaded yet.")
+
+    # Third pass: Embedding generation
+    is_lm_studio_embeddings = _provider_is_lm_studio(ai_engine, _embeddings_llm)
+    if is_lm_studio_embeddings:
+        embeddings_model = ai_engine.embeddings_model
+        print(f"[Model Mgmt] Loading LM Studio embeddings model: {embeddings_model} ...")
+        ai_engine.load_model(provider_name=_embeddings_llm, model_name=embeddings_model)
+        loaded = ai_engine.wait_for_model_loaded(provider_name=_embeddings_llm, model_name=embeddings_model)
+        if not loaded:
+            print("[Model Mgmt] WARNING: embeddings model may not be fully loaded yet.")
+
+    print(f"Starting AI/LLM Embeddings Pass on {len(processed_job_pool)} jobs...")
+    for index, job in enumerate(processed_job_pool):
+        if verbose:
+            print(f"Embedding job {index + 1}/{len(processed_job_pool)}: {job['features']['title']}")
+
+        if not job or 'features' not in job:
+            continue
+
+        features = job['features']
 
         # Vector generation
-        title_text = features['title']
+        title_text = features.get('title', '')
         if title_text:
             job['embeddings']['title_vector'] = generate_embeddings(ai_engine, title_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['title_vector'] = []
 
-        skills_text = ", ".join(features['skills'])
+        skills_text = ", ".join(features.get('skills', []))
         if skills_text:
             job['embeddings']['skills_vector'] = generate_embeddings(ai_engine, skills_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['skills_vector'] = []
 
-        requirements_text = ", ".join(features['requirements'])
+        requirements_text = ", ".join(features.get('requirements', []))
         if requirements_text:
             job['embeddings']['requirements_vector'] = generate_embeddings(ai_engine, requirements_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['requirements_vector'] = []
 
-        summary_text = features['summary']
+        summary_text = features.get('summary', '')
         if summary_text:
             job['embeddings']['description_vector'] = generate_embeddings(ai_engine, summary_text, provider_name=_embeddings_llm)
         else:
             job['embeddings']['description_vector'] = []
 
-        time.sleep(1)
+        time.sleep(0.5)
 
-    print("AI/LLM Pass Complete.")
+    if is_lm_studio_embeddings:
+        embeddings_model = ai_engine.embeddings_model
+        print(f"[Model Mgmt] Unloading LM Studio embeddings model: {embeddings_model} ...")
+        ai_engine.unload_model(provider_name=_embeddings_llm, model_name=embeddings_model)
+        unloaded = ai_engine.wait_for_model_unloaded(provider_name=_embeddings_llm, model_name=embeddings_model)
+        if not unloaded:
+            print("[Model Mgmt] WARNING: embeddings model may not be fully unloaded yet.")
+
+    print("AI/LLM Passes Complete.")
 
     # Persist to database if not skipping
     if dp and not skip_db:
@@ -736,6 +1159,8 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         print("Saving embeddings to database...")
         embedding_updates = []
         for job in processed_job_pool:
+            if not job.get('metadata', {}).get('in_db', False):
+                continue
             emb = job.get('embeddings', {})
             embedding_updates.append({
                 "job_id": job['metadata']['job_id'],
@@ -752,15 +1177,21 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         print("Updating job records in database with metadata...")
         job_updates = []
         for job in processed_job_pool:
+            if not job.get('metadata', {}).get('in_db', False):
+                continue
             job_updates.append({
                 "id": job['metadata']['job_id'],
                 "pay_range": job['features'].get('pay'),
                 "seniority": job['features'].get('seniority'),
                 "work_type": job['features'].get('work_type'),
                 "timezone": job['features'].get('timezone'),
+                "description": job['features'].get('summary'),
+                "skills": job['features'].get('skills'),
+                "responsibilities": job['features'].get('requirements'),
             })
-        dp.update_job_metadata(job_updates)
-        print(f"Updated {len(job_updates)} job records.")
+        if job_updates:
+            dp.update_job_metadata(job_updates)
+            print(f"Updated {len(job_updates)} job records.")
 
     print(f"Stage 2 complete: {len(processed_job_pool)} jobs processed.")
     return processed_job_pool
@@ -847,7 +1278,13 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
     if ai_engine is None:
         ai_engine = AIEngine(default_provider_name="lm_studio")
 
-    archetype_manager = ArchetypeManager()
+    _user_config = _load_user_config()
+    _embeddings_llm = _user_config.get("embeddings_llm", os.getenv("EMBEDDINGS_LLM", "lm_studio"))
+
+    from app.vector_engine import CallableEmbeddingProvider
+    embed_fn = lambda text: generate_embeddings(ai_engine, text, provider_name=_embeddings_llm)
+    embedding_provider = CallableEmbeddingProvider(embed_fn)
+    archetype_manager = ArchetypeManager(embedding_provider=embedding_provider)
 
     # Get active (non-skipped) jobs
     active_jobs = [j for j in jobs if not j.get('skip')]
@@ -894,12 +1331,22 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
         }
     ]
 
+    # Determine the expected dimension of the current embedding provider
+    test_emb = generate_embeddings(ai_engine, "test", provider_name=_embeddings_llm)
+    expected_dim = len(test_emb) if test_emb else 0
+
     for arch_config in all_archetypes:
         cached_arch = None
         if dp:
             cached_arch = dp.get_archetype_embeddings(arch_config['name'])
 
+        cache_valid = False
         if cached_arch:
+            title_emb = cached_arch.get('title_embedding')
+            if title_emb and len(title_emb) == expected_dim:
+                cache_valid = True
+
+        if cache_valid:
             archetype_manager.add_archetype(Archetype(
                 name=arch_config['name'],
                 type=cached_arch['archetype_type'],
@@ -909,7 +1356,10 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
                 metadata=cached_arch.get('metadata', {})
             ))
         else:
-            print(f"Generating new embeddings for archetype: {arch_config['name']}")
+            if cached_arch:
+                print(f"Cached archetype '{arch_config['name']}' has dimension mismatch (expected {expected_dim}). Regenerating...")
+            else:
+                print(f"Generating new embeddings for archetype: {arch_config['name']}")
             new_arch = archetype_manager.load_archetype(
                 name=arch_config['name'],
                 archetype_data=arch_config,
@@ -998,7 +1448,7 @@ async def pipeline_stage_vector_scoring(jobs: List[Dict], archetype_manager: Opt
 
         # Metadata adjustments
         job_meta = {
-            "is_remote": job.get('features', {}).get('work_type', '').lower() == 'remote',
+            "is_remote": (job.get('features', {}).get('work_type') or '').lower() == 'remote',
             "salary": 0,
             "days_old": 30
         }
@@ -1056,8 +1506,9 @@ async def pipeline_stage_vector_scoring(jobs: List[Dict], archetype_manager: Opt
     # Persist vector scores
     if dp and not skip_db:
         try:
-            dp.save_vector_scores(filtered_job_pool)
-            print(f"Persisted {len(filtered_job_pool)} vector scores to database.")
+            sorted_all_jobs = sorted(jobs, key=lambda x: x.get('semantic_score', 0), reverse=True)
+            dp.save_vector_scores(sorted_all_jobs)
+            print(f"Persisted {len(sorted_all_jobs)} vector scores to database.")
         except Exception as e:
             error_logger_continue(f"Vector score persistence failed: {e}")
 
@@ -1232,10 +1683,13 @@ async def pipeline_stage_final_queue(jobs: List[Dict], dp: Optional[DataPuller] 
 
     for i, job in enumerate(final_queue[:10], 1):
         features = job.get('features', {})
+        metadata = job.get('metadata', {})
         cheap_result = job.get('cheap_llm_result', {})
         strong_result = job.get('strong_llm_result', {})
 
         print(f"\n{i}. {features.get('title', 'Unknown')}")
+        print(f"   Job ID: {metadata.get('job_id', 'Unknown')} | Company: {metadata.get('company_name', 'Unknown')}")
+        print(f"   Link: {metadata.get('link', '')}")
         print(f"   Priority: {job.get('priority', 'unknown').upper()}")
         print(f"   Final Score: {job.get('final_score', 0):.1f}/100")
         print(f"   Recommendation: {job.get('apply_recommendation', 'maybe').upper()}")
@@ -1246,130 +1700,870 @@ async def pipeline_stage_final_queue(jobs: List[Dict], dp: Optional[DataPuller] 
     return final_queue
 
 
+def _row_to_job_dict(row) -> Dict:
+    if hasattr(row, 'get'):
+        d = row
+    else:
+        # Map tuple indices
+        keys = [
+            "id", "job_name", "company_name", "link", "job_summary", "extracted_summary",
+            "skills", "responsibilities", "pay_range", "seniority", "work_type", "timezone",
+            "source", "date_added", "city", "state", "location",
+            "title_embedding", "skills_embedding", "responsibilities_embedding", "description_embedding"
+        ]
+        d = {keys[i]: row[i] for i in range(min(len(keys), len(row)))}
+
+    # Parse skills and responsibilities
+    skills = d.get("skills")
+    if isinstance(skills, str):
+        try:
+            skills = json.loads(skills)
+        except Exception:
+            skills = [s.strip() for s in skills.split(",") if s.strip()]
+    elif not isinstance(skills, list):
+        skills = []
+
+    responsibilities = d.get("responsibilities")
+    if isinstance(responsibilities, str):
+        try:
+            responsibilities = json.loads(responsibilities)
+        except Exception:
+            responsibilities = [r.strip() for r in responsibilities.split("\n") if r.strip()]
+    elif not isinstance(responsibilities, list):
+        responsibilities = []
+
+    return {
+        "metadata": {
+            "job_id": d.get("id"),
+            "source": d.get("source", "scraped"),
+            "in_db": True,
+            "company_name": d.get("company_name", "Unknown"),
+            "link": d.get("link", ""),
+        },
+        "features": {
+            "title": d.get("job_name", ""),
+            "description": d.get("job_summary", ""),  # Raw description is in job_summary in DB
+            "summary": d.get("extracted_summary", ""), # Extracted summary is in description in DB
+            "pay": d.get("pay_range", ""),
+            "seniority": d.get("seniority", "NA"),
+            "work_type": d.get("work_type", "NA"),
+            "timezone": d.get("timezone", "NA"),
+            "skills": skills,
+            "requirements": responsibilities,
+            "city": d.get("city"),
+            "state": d.get("state"),
+            "location": d.get("location"),
+        },
+        "embeddings": {
+            "title_vector": d.get("title_embedding"),
+            "skills_vector": d.get("skills_embedding"),
+            "requirements_vector": d.get("responsibilities_embedding"),
+            "description_vector": d.get("description_embedding"),
+        }
+    }
+
+def _move_existing_logs() -> None:
+    """Move legacy log files from the project root to the logs/ directory."""
+    import shutil
+    import glob
+    os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
+    
+    root_to_logs = ["app_error.log", "pipeline_stats.log"]
+    for file in root_to_logs:
+        if os.path.exists(file):
+            try:
+                shutil.move(file, os.path.join("logs", file))
+                print(f"[Startup] Relocated {file} to logs/")
+            except Exception as e:
+                print(f"[Startup] Warning: could not move {file}: {e}")
+
+    for run_log in glob.glob("*_run.log"):
+        # Don't move if it's already a full path or inside logs
+        try:
+            shutil.move(run_log, os.path.join("logs", run_log))
+            print(f"[Startup] Relocated {run_log} to logs/")
+        except Exception as e:
+            print(f"[Startup] Warning: could not move {run_log}: {e}")
+
+    for skip_file in glob.glob("skipped_jobs_*.json"):
+        try:
+            shutil.move(skip_file, os.path.join("logs", "skipped", skip_file))
+            print(f"[Startup] Relocated {skip_file} to logs/skipped/")
+        except Exception as e:
+            print(f"[Startup] Warning: could not move {skip_file}: {e}")
+
+
+async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False) -> List[Dict]:
+    """
+    Perform the special scraping workflow for jobs in the database from the last 24 hours that do not have descriptions.
+    """
+    # 1. Update matching jobs: skip = NULL
+    update_query = """
+        UPDATE job
+        SET skip = NULL
+        WHERE job_summary IS NULL AND date_added >= CURRENT_DATE - INTERVAL '1 day';
+    """
+    try:
+        dp.conn.execute_sql(update_query)
+        print("Updated jobs from the previous 24 hours missing descriptions to skip = NULL.")
+    except Exception as e:
+        print(f"Error resetting skip status for jobs missing descriptions: {e}")
+
+    # 2. Pull all jobs from the previous 24 hours where the description (job_summary) is null
+    select_query = """
+        SELECT j.id, j.link, j.source, j.job_name, c.company_name, j.date_added
+        FROM job j
+        LEFT JOIN company c ON j.company_id = c.id
+        WHERE j.job_summary IS NULL AND j.date_added >= CURRENT_DATE - INTERVAL '1 day';
+    """
+    try:
+        rows = dp.conn.execute_sql(select_query, fetch=True)
+    except Exception as e:
+        print(f"Error querying jobs missing descriptions: {e}")
+        return []
+
+    if not rows:
+        print("No jobs found in the previous 24 hours missing descriptions.")
+        return []
+
+    jobs_without_desc = []
+    for row in rows:
+        if isinstance(row, dict):
+            jobs_without_desc.append({
+                "db_id": row.get("id"),
+                "url": row.get("link"),
+                "source": row.get("source"),
+                "title": row.get("job_name"),
+                "company": row.get("company_name"),
+                "date": row.get("date_added"),
+            })
+        else:
+            jobs_without_desc.append({
+                "db_id": row[0],
+                "url": row[1],
+                "source": row[2],
+                "title": row[3] if len(row) > 3 else "",
+                "company": row[4] if len(row) > 4 else "",
+                "date": row[5] if len(row) > 5 else None,
+            })
+
+    print(f"Found {len(jobs_without_desc)} jobs from the last 24 hours missing descriptions to scrape.")
+
+    import datetime
+    import glob
+    from urllib.parse import urlparse
+    import time
+    import random
+    
+    os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file_path = os.path.join("logs", f"missing_desc_scrape_{timestamp}.log")
+    
+    job_page_strategy_dir = "./job_page_strategy"
+    
+    def find_strategy_file(source_name: str) -> str | None:
+        if not source_name:
+            return None
+        source_lower = source_name.lower()
+        for filepath in glob.glob(os.path.join(job_page_strategy_dir, "*.json")):
+            filename = os.path.basename(filepath)
+            name = filename[:-5].lower() # remove .json
+            if name == source_lower:
+                return filepath
+            if "." in name:
+                domain_part = name.split('.')[0]
+                if domain_part == source_lower:
+                    return filepath
+            if "." in source_lower:
+                source_domain_part = source_lower.split('.')[0]
+                if source_domain_part == name:
+                    return filepath
+        return None
+
+    successful_ids = []
+    log_entries = []
+
+    for job in jobs_without_desc:
+        db_id = job["db_id"]
+        url = job["url"]
+        source = job.get("source", "")
+        job_name = job.get("title", "")
+        company_name = job.get("company", "")
+        
+        if not url or not source:
+            log_msg = f"Job ID {db_id} ({job_name} | {company_name}): Failed to scrape. Reason: Missing URL or source."
+            print(log_msg)
+            log_entries.append(log_msg)
+            try:
+                dp.bulk_update_skip_status([db_id])
+            except Exception as e:
+                print(f"Warning: failed to update skip status for job {db_id}: {e}")
+            continue
+
+        strategy_path = find_strategy_file(source)
+        if not strategy_path:
+            try:
+                parsed = urlparse(url)
+                domain = parsed.netloc.lower()
+                if domain.startswith("www."):
+                    domain = domain[4:]
+            except Exception:
+                domain = source.lower()
+            
+            print(f"  No strategy file found for source '{source}'. Generating strategy for domain '{domain}' using {url}...")
+            success = await dp.generate_and_test_strategy(destination_link=url, job_id=db_id, domain_name=domain)
+            if success:
+                strategy_path = find_strategy_file(source)
+                if not strategy_path:
+                    strategy_path = os.path.join(job_page_strategy_dir, f"{domain}.json")
+            else:
+                log_msg = f"Job ID {db_id} (URL: {url}): Failed to scrape. Reason: Could not generate a working strategy."
+                print(log_msg)
+                log_entries.append(log_msg)
+                try:
+                    dp.bulk_update_skip_status([db_id])
+                except Exception as e:
+                    print(f"Warning: failed to update skip status for job {db_id}: {e}")
+                continue
+
+        try:
+            with open(strategy_path, "r") as f:
+                strategy = json.load(f)
+        except Exception as e:
+            log_msg = f"Job ID {db_id} (URL: {url}): Failed to scrape. Reason: Error loading strategy file: {e}"
+            print(log_msg)
+            log_entries.append(log_msg)
+            try:
+                dp.bulk_update_skip_status([db_id])
+            except Exception as e:
+                print(f"Warning: failed to update skip status for job {db_id}: {e}")
+            continue
+
+        payload = dict(strategy)
+        if payload.get("url") == "{url}":
+            payload["url"] = url
+
+        api_method = "extract-js" if payload.get("js_config") is not None else "extract"
+        
+        description = ""
+        scraper_response = None
+        try:
+            scraper_response = await dp.scrape_data(payload, api_method=api_method)
+            if scraper_response.get("status_code") == 200 and scraper_response.get("data"):
+                data_result = scraper_response["data"]
+                if isinstance(data_result, list) and len(data_result) > 0:
+                    desc_key = next(
+                        (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
+                         if data_result[0].get(k)),
+                        None
+                    )
+                    if desc_key:
+                        desc_text = data_result[0].get(desc_key, "")
+                    else:
+                        desc_text = next(
+                            (v for v in data_result[0].values() if isinstance(v, str) and len(v) > 50),
+                            ""
+                        )
+                    if desc_text and len(desc_text) > 50:
+                        description = desc_text
+        except Exception as e:
+            scraper_response = {"error": f"Exception raised during scrape: {e}"}
+
+        if description:
+            try:
+                dp.conn.update("job", {"job_summary": description}, {"id": db_id}, dbname=dp.dbname)
+                successful_ids.append(db_id)
+                log_msg = f"Job ID {db_id} (URL: {url}): Scraped successfully."
+                print(log_msg)
+                log_entries.append(log_msg)
+            except Exception as e:
+                log_msg = f"Job ID {db_id} (URL: {url}): Failed to update DB with description: {e}"
+                print(log_msg)
+                log_entries.append(log_msg)
+        else:
+            resp_str = json.dumps(scraper_response) if scraper_response else "No response returned"
+            log_msg = f"Job ID {db_id} (URL: {url}): Failed to scrape. Scraper response: {resp_str}"
+            print(log_msg)
+            log_entries.append(log_msg)
+            try:
+                dp.bulk_update_skip_status([db_id])
+            except Exception as e:
+                print(f"Warning: failed to update skip status for job {db_id}: {e}")
+
+        time.sleep(random.uniform(0.5, 1.5))
+
+    try:
+        with open(log_file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(log_entries) + "\n")
+        print(f"Detailed run status saved to: {log_file_path}")
+    except Exception as e:
+        print(f"Warning: failed to write run log file '{log_file_path}': {e}")
+
+    if not successful_ids:
+        return []
+
+    # Fetch fully populated records from DB
+    query_cols = [
+        "j.id", "j.job_name", "c.company_name", "j.link", "j.job_summary", "j.description AS extracted_summary",
+        "j.skills", "j.responsibilities", "j.pay_range", "j.seniority", "j.work_type", "j.timezone",
+        "j.source", "j.date_added", "o.city", "o.state", "o.location",
+        "je.title_embedding", "je.skills_embedding", "je.responsibilities_embedding", "je.description_embedding"
+    ]
+    joins = [
+        "JOIN company c ON j.company_id = c.id",
+        "LEFT JOIN office o ON j.office_id = o.id",
+        "LEFT JOIN job_embeddings je ON j.id = je.job_id"
+    ]
+    ids_placeholder = ", ".join(["%s"] * len(successful_ids))
+    query = f"""
+        SELECT {', '.join(query_cols)}
+        FROM job j
+        {' '.join(joins)}
+        WHERE j.id IN ({ids_placeholder})
+    """
+    try:
+        rows = dp.conn.execute_sql(query, tuple(successful_ids), fetch=True)
+        if rows:
+            return [_row_to_job_dict(row) for row in rows]
+    except Exception as e:
+        print(f"Error fetching successfully scraped jobs from DB: {e}")
+
+    return []
+
+async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, force_reprocess: bool = False) -> List[Dict]:
+    """
+    Load jobs from the database for a specific stage, selecting only active jobs
+    that have completed the prior stages but are missing the target stage's results.
+    
+    When force_reprocess=True and stage==2, selects jobs that already have embeddings
+    (so they can be re-processed).
+    """
+    # Base query columns
+    query_cols = [
+        "j.id", "j.job_name", "c.company_name", "j.link", "j.job_summary", "j.description AS extracted_summary",
+        "j.skills", "j.responsibilities", "j.pay_range", "j.seniority", "j.work_type", "j.timezone",
+        "j.source", "j.date_added", "o.city", "o.state", "o.location",
+        "je.title_embedding", "je.skills_embedding", "je.responsibilities_embedding", "je.description_embedding"
+    ]
+    
+    joins = [
+        "JOIN company c ON j.company_id = c.id",
+        "LEFT JOIN office o ON j.office_id = o.id",
+        "LEFT JOIN job_embeddings je ON j.id = je.job_id"
+    ]
+    
+    where_clauses = ["j.skip IS NOT TRUE"]
+    
+    if stage > 2:
+        # For stages 3+, we need jobs that have completed Stage 2 (embeddings exist and are not NULL)
+        where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
+    elif stage == 2:
+        if force_reprocess:
+            # Reprocess: select jobs that already have embeddings to re-run Stage 2
+            where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
+        else:
+            # Normal: select jobs that have been scraped but DON'T have embeddings yet,
+            # or have an incomplete/NULL embedding record.
+            where_clauses.append("(je.job_id IS NULL OR je.title_embedding IS NULL)")
+        # Ensure we have a job description to embed
+        where_clauses.append("j.job_summary IS NOT NULL")
+    
+    # Add columns and joins depending on what stage we are starting at
+    if stage >= 6:
+        query_cols.extend([
+            "vs.semantic_score", "vs.title_similarity", "vs.skills_similarity",
+            "vs.responsibility_similarity", "vs.adjusted_score", "vs.archetype_name AS best_archetype"
+        ])
+        joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+        
+    if stage >= 7:
+        query_cols.extend([
+            "clr.fit_score AS cheap_fit_score", "clr.decision AS cheap_decision",
+            "clr.strengths AS cheap_strengths", "clr.concerns AS cheap_concerns"
+        ])
+        joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
+        
+    if stage >= 8:
+        query_cols.extend([
+            "slr.final_score AS strong_final_score", "slr.priority AS strong_priority",
+            "slr.apply_recommendation AS strong_apply_rec", "slr.red_flags AS strong_red_flags",
+            "slr.tailoring_notes AS strong_tailoring_notes", "slr.recruiter_bait_likelihood AS strong_bait",
+            "slr.detailed_fit_analysis AS strong_fit_analysis"
+        ])
+        joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
+
+    # Add stage-specific filters (pull only if the current stage's result is missing)
+    if stage == 3:
+        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+        where_clauses.append("vs.job_id IS NULL")
+    elif stage == 4 or stage == 5:
+        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+        where_clauses.append("vs.job_id IS NULL")
+    elif stage == 6:
+        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+        if "LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id" not in joins:
+            joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
+        where_clauses.append("vs.job_id IS NOT NULL")
+        where_clauses.append("vs.adjusted_score >= 0.72")
+        where_clauses.append("clr.job_id IS NULL")
+    elif stage == 7:
+        if "LEFT JOIN strong_llm_results slr ON j.id = slr.job_id" not in joins:
+            joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
+        where_clauses.append("clr.decision IN ('yes', 'maybe')")
+        where_clauses.append("slr.job_id IS NULL")
+    elif stage == 8:
+        where_clauses.append("slr.job_id IS NOT NULL")
+        joins.append("LEFT JOIN final_application_queue faq ON j.id = faq.job_id")
+        where_clauses.append("faq.job_id IS NULL")
+
+    query = f"""
+        SELECT {', '.join(query_cols)}
+        FROM job j
+        {' '.join(joins)}
+        WHERE {' AND '.join(where_clauses)}
+        ORDER BY j.date_added DESC
+        LIMIT %s
+    """
+    
+    try:
+        # When Stage 1 is skipped, these staging queries may need more time
+        # since they join several tables to load jobs that were previously
+        # scraped. We double the default statement_timeout from 15s to 30s.
+        dp.conn.execute_sql("SET statement_timeout = 60000")
+        rows = dp.conn.execute_sql(query, (limit,), fetch=True)
+    except Exception as e:
+        print(f"Error querying DB for Stage {stage}: {e}")
+        return []
+        
+    if not rows:
+        print(f"No jobs found in DB for Stage {stage} processing.")
+        return []
+        
+    jobs = []
+    for row in rows:
+        job = _row_to_job_dict(row)
+        
+        if stage >= 6 and isinstance(row, dict):
+            job['best_archetype'] = row.get("best_archetype")
+            semantic_score = row.get("semantic_score")
+            job['semantic_score'] = semantic_score
+            job['semantic_score_percent'] = int(round(semantic_score * 100)) if semantic_score is not None else 0
+            job['title_similarity'] = row.get("title_similarity")
+            job['skills_similarity'] = row.get("skills_similarity")
+            job['responsibility_similarity'] = row.get("responsibility_similarity")
+            job['adjusted_score'] = row.get("adjusted_score")
+            job['retrieval_metadata'] = {
+                "semantic_score": row.get("semantic_score"),
+                "semantic_score_percent": job['semantic_score_percent'],
+                "best_archetype": row.get("best_archetype")
+            }
+                
+        if stage >= 7 and isinstance(row, dict):
+            if row.get("cheap_decision"):
+                strengths = row.get("cheap_strengths")
+                if isinstance(strengths, str):
+                    try: strengths = json.loads(strengths)
+                    except Exception: strengths = []
+                concerns = row.get("cheap_concerns")
+                if isinstance(concerns, str):
+                    try: concerns = json.loads(concerns)
+                    except Exception: concerns = []
+                    
+                job['cheap_llm_result'] = {
+                    "fit_score": row.get("cheap_fit_score"),
+                    "decision": row.get("cheap_decision"),
+                    "strengths": strengths or [],
+                    "concerns": concerns or []
+                }
+                
+        if stage >= 8 and isinstance(row, dict):
+            if row.get("strong_apply_rec"):
+                red_flags = row.get("strong_red_flags")
+                if isinstance(red_flags, str):
+                    try: red_flags = json.loads(red_flags)
+                    except Exception: red_flags = []
+                tailoring_notes = row.get("strong_tailoring_notes")
+                if isinstance(tailoring_notes, str):
+                    try: tailoring_notes = json.loads(tailoring_notes)
+                    except Exception: tailoring_notes = []
+                    
+                job['strong_llm_result'] = {
+                    "final_score": row.get("strong_final_score"),
+                    "priority": row.get("strong_priority"),
+                    "apply_recommendation": row.get("strong_apply_rec"),
+                    "red_flags": red_flags or [],
+                    "tailoring_notes": tailoring_notes or [],
+                    "recruiter_bait_likelihood": row.get("strong_bait"),
+                    "detailed_fit_analysis": row.get("strong_fit_analysis")
+                }
+                job['final_score'] = row.get("strong_final_score")
+                job['priority'] = row.get("strong_priority")
+                job['apply_recommendation'] = row.get("strong_apply_rec")
+                
+        jobs.append(job)
+    return jobs
+
+
 # =====================================================
 # ORIGINAL MAIN (calls pipeline stages)
 # =====================================================
 
 async def main(scrape_pages: Optional[int] = None,
                scrape_visible: bool = False,
-               scrape_debug: bool = False):
+               scrape_debug: bool = False,
+               skip_part_a: Optional[bool] = None,
+               stage_range: str = "0-8",
+               db_limit: int = 50,
+               skip_db: bool = False,
+               scrape_missing_24h: bool = False):
     """
-    Original main function - runs the full pipeline end-to-end.
+    Run selected pipeline stages.
+
+    Args:
+        scrape_pages: Override max_pages for scraping.
+        scrape_visible: Show browser window (disable headless).
+        scrape_debug: Enable debug logging during scraping.
+        skip_part_a: Skip Part A of legacy fallback scraping.
+        stage_range: Inclusive stage range, e.g. "0-8", "2-4", "2".
+        db_limit: Max records to pull from DB in any bulk-load operation.
+        skip_db: Skip database operations for all stages.
+        scrape_missing_24h: Only scrape descriptions for jobs from the last 24h.
+
+    Returns:
+        Pipeline result from the last executed stage.
     """
+    # ── Parse stage range ──
+    stage_start, stage_end = _parse_stage_range(stage_range)
+
     print("=" * 60)
-    print("FULL JOB SCRAPING AND ANALYSIS PIPELINE")
+    _print_stage_header("JOB SCRAPING AND ANALYSIS PIPELINE", stage_start, stage_end)
+    print(f"DB limit: {db_limit}")
     print("=" * 60)
 
-    # Stage 0: Setup
-    setup_data = await pipeline_stage_setup(verbose=False)
+    # ── Relocate existing log files ──
+    _move_existing_logs()
+
+    # Stage 0 is always run (provides essential infrastructure)
+    setup_data = await pipeline_stage_setup(skip_db=skip_db, verbose=False)
     dp = setup_data["dp"]
     ai = setup_data["ai"]
     tp = setup_data["tp"]
+
+    # Store db_limit in setup_data for downstream stages
+    setup_data["db_limit"] = db_limit
+
     _log_pipeline_stats("0: Setup", 0, source_hint="profile_extraction")
 
+    # ── Per-stage execution ──
+    processed_job_pool: List[Dict] = []
+    active_jobs: List[Dict] = []
+    archetype_manager: Optional[ArchetypeManager] = None
+    filtered_job_pool: List[Dict] = []
+    shortlisted_jobs: List[Dict] = []
+    deeply_analyzed_jobs: List[Dict] = []
+    final_queue: List[Dict] = []
+
     # Stage 1: Scrape
-    processed_job_pool = await pipeline_stage_scrape(
-        setup_data=setup_data,
-        skip_db=False,
-        verbose=False,
-        max_pages=scrape_pages,
-        headless=not scrape_visible,
-        debug_logging=scrape_debug,
-    )
-    _log_pipeline_stats("1: Scrape", len(processed_job_pool), source_hint="adapters+fallback")
+    if 1 <= stage_end and stage_start <= 1:
+        processed_job_pool = await pipeline_stage_scrape(
+            setup_data=setup_data,
+            skip_db=skip_db,
+            verbose=False,
+            max_pages=scrape_pages,
+            headless=not scrape_visible,
+            debug_logging=scrape_debug,
+            skip_part_a=skip_part_a,
+            db_limit=db_limit,
+            scrape_missing_24h=scrape_missing_24h,
+        )
+        _log_pipeline_stats("1: Scrape", len(processed_job_pool), source_hint="adapters+fallback")
+    elif stage_start > 1:
+        print(f"[SKIP] Stage 1 (Scrape) — outside range {stage_start}-{stage_end}")
 
     # Stage 2: Embedding Generation + LLM Extraction
-    processed_job_pool = await pipeline_stage_embed_and_extract(
-        jobs=processed_job_pool,
-        ai_engine=ai,
-        text_processor=tp,
-        dp=dp,
-        skip_db=False,
-        verbose=False,
-    )
-    _log_pipeline_stats("2: Embed+Extract", len(processed_job_pool), source_hint="llm_extraction")
+    if 2 <= stage_end and stage_start <= 2:
+        if not processed_job_pool:
+            print("[INFO] No scraped jobs available. Attempting to load from DB for Stage 2 (Embed+Extract)...")
+            # If the user specifically requested stage 2, we treat it as a re-process request
+            is_reprocess = (stage_start <= 2 and stage_end >= 2)
+            processed_job_pool = await _load_jobs_for_stage(dp, stage=2, limit=db_limit, force_reprocess=is_reprocess)
+            print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
+
+        if processed_job_pool:
+            # Check user config for Stage 2 extraction LLM
+            _user_config = _load_user_config()
+            _extraction_llm = _user_config.get("extraction_llm", os.getenv("EXTRACTION_LLM", "lm_studio"))
+            _extraction_model = _user_config.get("extraction_model", os.getenv("EXTRACTION_MODEL", "local-model"))
+            
+            if _extraction_llm == "lm_studio":
+                _load_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 2", model_name=_extraction_model)
+
+            processed_job_pool = await pipeline_stage_embed_and_extract(
+                jobs=processed_job_pool,
+                ai_engine=ai,
+                text_processor=tp,
+                dp=dp,
+                skip_db=skip_db,
+                verbose=False,
+            )
+
+            if _extraction_llm == "lm_studio":
+                _unload_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 2", model_name=_extraction_model)
+        _log_pipeline_stats("2: Embed+Extract", len(processed_job_pool), source_hint="llm_extraction")
+    elif stage_start > 2:
+        print(f"[SKIP] Stage 2 (Embed+Extract) — outside range {stage_start}-{stage_end}")
 
     # Stage 3: Rule Filtering
-    processed_job_pool = await pipeline_stage_rule_filter(
-        jobs=processed_job_pool,
-        user_preferences=setup_data.get("user_preferences", {}),
-        dp=dp,
-        skip_db=False,
-    )
-    skipped_count = sum(1 for j in processed_job_pool if j.get('skip'))
-    _log_pipeline_stats("3: Rule Filter", len(processed_job_pool), skipped_count=skipped_count, source_hint="hard_constraints")
+    if 3 <= stage_end and stage_start <= 3:
+        if not processed_job_pool:
+            print("[INFO] No jobs in memory. Attempting to load from DB for Stage 3 (Rule Filter)...")
+            processed_job_pool = await _load_jobs_for_stage(dp, stage=3, limit=db_limit)
+            print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
+
+        if processed_job_pool:
+            processed_job_pool = await pipeline_stage_rule_filter(
+                jobs=processed_job_pool,
+                user_preferences=setup_data.get("user_preferences", {}),
+                dp=dp,
+                skip_db=skip_db,
+            )
+        skipped_count = sum(1 for j in processed_job_pool if j.get('skip'))
+        _log_pipeline_stats("3: Rule Filter", len(processed_job_pool), skipped_count=skipped_count, source_hint="hard_constraints")
+    elif stage_start > 3:
+        print(f"[SKIP] Stage 3 (Rule Filter) — outside range {stage_start}-{stage_end}")
 
     # Stage 4: Archetype Engine Integration
-    active_jobs, archetype_manager = await pipeline_stage_archetype_integration(
-        jobs=processed_job_pool,
-        ai_engine=ai,
-        dp=dp,
-        setup_data=setup_data,
-        skip_db=False,
-    )
-    _log_pipeline_stats("4: Archetypes", len(active_jobs), source_hint="archetype_comparison")
+    if 4 <= stage_end and stage_start <= 4:
+        if not processed_job_pool:
+            print("[INFO] No jobs in memory. Attempting to load from DB for Stage 4 (Archetype)...")
+            processed_job_pool = await _load_jobs_for_stage(dp, stage=4, limit=db_limit)
+            print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
 
-    # Stage 5: Vector Scoring
-    filtered_job_pool = await pipeline_stage_vector_scoring(
-        jobs=active_jobs,
-        archetype_manager=archetype_manager,
-        dp=dp,
-        skip_db=False,
-    )
-    _log_pipeline_stats("5: Vector Scoring", len(filtered_job_pool), source_hint="semantic_threshold")
+        _load_model_if_lm_studio(ai, stage_label="Stage 4")
+        active_jobs, archetype_manager = await pipeline_stage_archetype_integration(
+            jobs=processed_job_pool,
+            ai_engine=ai,
+            dp=dp,
+            setup_data=setup_data,
+            skip_db=skip_db,
+        )
+        _unload_model_if_lm_studio(ai, stage_label="Stage 4")
+        _log_pipeline_stats("4: Archetypes", len(active_jobs), source_hint="archetype_comparison")
+    elif stage_start > 4:
+        print(f"[SKIP] Stage 4 (Archetype) — outside range {stage_start}-{stage_end}")
+        # Automatically initialize archetype manager if running Stage 5 next
+        if stage_start == 5:
+            print("[INFO] Initializing archetype manager for Stage 5...")
+            _, archetype_manager = await pipeline_stage_archetype_integration(
+                jobs=[],
+                ai_engine=ai,
+                dp=dp,
+                setup_data=setup_data,
+                skip_db=skip_db,
+            )
+
+    # Stage 5: Vector Scoring WITH ARCHETYPES
+    if 5 <= stage_end and stage_start <= 5:
+        if not active_jobs:
+            if not processed_job_pool:
+                print("[INFO] No jobs in memory. Attempting to load from DB for Stage 5 (Vector Scoring)...")
+                processed_job_pool = await _load_jobs_for_stage(dp, stage=5, limit=db_limit)
+                print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
+            active_jobs = [j for j in processed_job_pool if not j.get('skip')]
+
+        if active_jobs and archetype_manager:
+            filtered_job_pool = await pipeline_stage_vector_scoring(
+                jobs=active_jobs,
+                archetype_manager=archetype_manager,
+                dp=dp,
+                skip_db=skip_db,
+            )
+        _log_pipeline_stats("5: Vector Scoring", len(filtered_job_pool), source_hint="semantic_threshold")
+    elif stage_start > 5:
+        print(f"[SKIP] Stage 5 (Vector Score) — outside range {stage_start}-{stage_end}")
 
     # Stage 6: Cheap LLM Classification
-    shortlisted_jobs = await pipeline_stage_cheap_llm(
-        jobs=filtered_job_pool,
-        setup_data=setup_data,
-        dp=dp,
-        skip_db=False,
-    )
-    _log_pipeline_stats("6: Cheap LLM", len(shortlisted_jobs), source_hint="cheap_llm_classifier")
+    if 6 <= stage_end and stage_start <= 6:
+        if not filtered_job_pool:
+            print("[INFO] No jobs in memory. Attempting to load from DB for Stage 6 (Cheap LLM)...")
+            filtered_job_pool = await _load_jobs_for_stage(dp, stage=6, limit=db_limit)
+            print(f"[INFO] Loaded {len(filtered_job_pool)} jobs from DB.")
+
+        if filtered_job_pool:
+            _user_config = _load_user_config()
+            cheap_llm_provider = _user_config.get("cheap_llm_provider", os.getenv("CHEAP_LLM_PROVIDER", "gemini"))
+            cheap_llm_model = _user_config.get("cheap_llm_model", os.getenv("CHEAP_LLM_MODEL"))
+
+            if cheap_llm_provider == "lm_studio":
+                _load_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 6", model_name=cheap_llm_model)
+
+            shortlisted_jobs = await pipeline_stage_cheap_llm(
+                jobs=filtered_job_pool,
+                setup_data=setup_data,
+                dp=dp,
+                skip_db=skip_db,
+            )
+
+            if cheap_llm_provider == "lm_studio":
+                _unload_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 6", model_name=cheap_llm_model)
+        _log_pipeline_stats("6: Cheap LLM", len(shortlisted_jobs), source_hint="cheap_llm_classifier")
+    elif stage_start > 6:
+        print(f"[SKIP] Stage 6 (Cheap LLM) — outside range {stage_start}-{stage_end}")
 
     # Stage 7: Strong LLM Reranking
-    deeply_analyzed_jobs = await pipeline_stage_strong_llm(
-        jobs=shortlisted_jobs,
-        setup_data=setup_data,
-        dp=dp,
-        skip_db=False,
-    )
-    _log_pipeline_stats("7: Strong LLM", len(deeply_analyzed_jobs), source_hint="strong_llm_reranker")
+    if 7 <= stage_end and stage_start <= 7:
+        if not shortlisted_jobs:
+            print("[INFO] No jobs in memory. Attempting to load from DB for Stage 7 (Strong LLM)...")
+            shortlisted_jobs = await _load_jobs_for_stage(dp, stage=7, limit=db_limit)
+            print(f"[INFO] Loaded {len(shortlisted_jobs)} jobs from DB.")
+
+        if shortlisted_jobs:
+            _user_config = _load_user_config()
+            strong_llm_provider = _user_config.get("strong_llm_provider", os.getenv("STRONG_LLM_PROVIDER", "gemini"))
+            strong_llm_model = _user_config.get("strong_llm_model", os.getenv("STRONG_LLM_MODEL"))
+
+            if strong_llm_provider == "lm_studio":
+                _load_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 7", model_name=strong_llm_model)
+
+            deeply_analyzed_jobs = await pipeline_stage_strong_llm(
+                jobs=shortlisted_jobs,
+                setup_data=setup_data,
+                dp=dp,
+                skip_db=skip_db,
+            )
+
+            if strong_llm_provider == "lm_studio":
+                _unload_model_if_lm_studio(ai, provider_name="lm_studio", stage_label="Stage 7", model_name=strong_llm_model)
+        _log_pipeline_stats("7: Strong LLM", len(deeply_analyzed_jobs), source_hint="strong_llm_reranker")
+    elif stage_start > 7:
+        print(f"[SKIP] Stage 7 (Strong LLM) — outside range {stage_start}-{stage_end}")
 
     # Stage 8: Final Application Queue
-    final_queue = await pipeline_stage_final_queue(
-        jobs=deeply_analyzed_jobs,
-        dp=dp,
-        skip_db=False,
-    )
-    _log_pipeline_stats("8: Final Queue", len(final_queue), source_hint="final_ranking")
+    if 8 <= stage_end and stage_start <= 8:
+        if not deeply_analyzed_jobs:
+            print("[INFO] No jobs in memory. Attempting to load from DB for Stage 8 (Final Queue)...")
+            deeply_analyzed_jobs = await _load_jobs_for_stage(dp, stage=8, limit=db_limit)
+            print(f"[INFO] Loaded {len(deeply_analyzed_jobs)} jobs from DB.")
 
-    # Pipeline Summary
+        if deeply_analyzed_jobs:
+            final_queue = await pipeline_stage_final_queue(
+                jobs=deeply_analyzed_jobs,
+                dp=dp,
+                skip_db=skip_db,
+            )
+        _log_pipeline_stats("8: Final Queue", len(final_queue), source_hint="final_ranking")
+    elif stage_start > 8:
+        print(f"[SKIP] Stage 8 (Final Queue) — outside range {stage_start}-{stage_end}")
+
+    # ── Summary and Return logic ──
+    if not skip_db and dp:
+        try:
+            import datetime
+            import time
+            run_id = f"cli_{int(time.time())}"
+            dp.save_token_usage(run_id, datetime.datetime.now(), usage_tracker.all_records)
+        except Exception as e:
+            print(f"[WARNING] Could not save token usage: {e}")
+
+    if stage_end == 8 and final_queue:
+        # Pipeline Summary
+        print("\n" + "=" * 60)
+        print("PIPELINE COMPLETE")
+        print("=" * 60)
+        print(f"Total jobs processed: {len(processed_job_pool) or len(active_jobs)}")
+        print(f"Jobs after semantic filtering: {len(filtered_job_pool)}")
+        print(f"Jobs after cheap LLM classification: {len(shortlisted_jobs)}")
+        print(f"Jobs after strong LLM reranking: {len(deeply_analyzed_jobs)}")
+        apply_jobs_count = sum(1 for j in final_queue if j.get('apply_recommendation', '').lower() == 'apply')
+        print(f"Final application queue: {apply_jobs_count} jobs")
+
+        # LLM Usage Summary
+        usage_tracker.print_summary()
+        return final_queue
+
+    # Summary for partial runs
     print("\n" + "=" * 60)
-    print("PIPELINE COMPLETE")
+    print("PIPELINE RUN COMPLETE")
+    print(f"Stages executed: {stage_start}-{stage_end}")
     print("=" * 60)
-    print(f"Total jobs processed: {len(processed_job_pool)}")
-    print(f"Jobs after semantic filtering: {len(filtered_job_pool)}")
-    print(f"Jobs after cheap LLM classification: {len(shortlisted_jobs)}")
-    print(f"Jobs after strong LLM reranking: {len(deeply_analyzed_jobs)}")
-    print(f"Final application queue: {len(final_queue)} jobs")
 
     # LLM Usage Summary
     usage_tracker.print_summary()
 
-    return final_queue
+    # Return the most relevant result
+    if stage_end == 7:
+        return deeply_analyzed_jobs
+    elif stage_end == 6:
+        return shortlisted_jobs
+    elif stage_end == 5:
+        return filtered_job_pool
+    elif stage_end == 4:
+        return active_jobs
+    else:
+        return processed_job_pool
+
+
+def _parse_stage_range(raw: str) -> Tuple[int, int]:
+    """
+    Parse a stage range string into an inclusive (start, end) tuple.
+
+    Accepts:
+        "0-8"  -> (0, 8)
+        "2-4"  -> (2, 4)
+        "2"    -> (2, 2)
+        "all"  -> (0, 8)
+
+    Returns:
+        Tuple of (start_stage, end_stage), both inclusive.
+    """
+    if raw.lower() in ("all", "full"):
+        return (0, 8)
+
+    if "-" in raw:
+        parts = raw.split("-", 1)
+        try:
+            start = int(parts[0].strip())
+            end = int(parts[1].strip())
+        except (ValueError, IndexError):
+            print(f"Warning: invalid stage range '{raw}'. Defaulting to 0-8.")
+            return (0, 8)
+    else:
+        try:
+            n = int(raw.strip())
+            start = n
+            end = n
+        except ValueError:
+            print(f"Warning: invalid stage '{raw}'. Defaulting to 0-8.")
+            return (0, 8)
+
+    # Clamp to valid range
+    start = max(0, min(start, 8))
+    end = max(0, min(end, 8))
+    if start > end:
+        start, end = end, start
+
+    return (start, end)
+
+
+def _print_stage_header(title: str, stage_start: int, stage_end: int) -> None:
+    """Print a centered pipeline header with stage info."""
+    print(f"{title:^60}")
+    if stage_start == 0 and stage_end == 8:
+        print("Running full pipeline (stages 0-8)")
+    elif stage_start == stage_end:
+        print(f"Running stage {stage_start} only")
+    else:
+        print(f"Running stages {stage_start}-{stage_end}")
 
 
 # Entry point
 if __name__ == "__main__":
     import sys
     import argparse
-
-    # Check for TUI mode
-    if "--tui" in sys.argv or "-t" in sys.argv:
-        from app.tui import run_tui
-        run_tui()
-        sys.exit(0)
+    import logging
 
     parser = argparse.ArgumentParser(
         description="Job Scraping and Analysis Pipeline"
@@ -1406,28 +2600,74 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable verbose output.",
     )
+    parser.add_argument(
+        "--skip-part-a",
+        action="store_true",
+        dest="skip_part_a",
+        help="Skip Part A (company career-page scraping) in the legacy fallback path and jump straight to description scraping.",
+    )
+    parser.add_argument(
+        "-s", "--stage",
+        type=str,
+        default="0-8",
+        dest="stage_range",
+        help="Stage range to run, e.g. '0-8' (all), '2-4', '2' (single stage). Stages: 0=Setup, 1=Scrape, 2=Embed, 3=Filter, 4=Archetype, 5=Vector, 6=CheapLLM, 7=StrongLLM, 8=FinalQueue",
+    )
+    parser.add_argument(
+        "-l", "--limit",
+        type=int,
+        default=50,
+        dest="db_limit",
+        help="Max records to pull from database in any bulk-load operation (default: 50).",
+    )
+    parser.add_argument(
+        "--scrape-missing-24h",
+        action="store_true",
+        dest="scrape_missing_24h",
+        help="At Step 1, ONLY try to scrape descriptions for jobs from the previous 24h that do not have them.",
+    )
 
     args = parser.parse_args()
 
-    # Apply log file if specified
+    # Always set root logger level and add logs/app_error.log
+    root = logging.getLogger()
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    root.setLevel(log_level)
+
+    import os
+    os.makedirs("logs", exist_ok=True)
+    
+    error_handler = logging.FileHandler(os.path.join("logs", "app_error.log"), mode="a", encoding="utf-8")
+    error_handler.setLevel(logging.ERROR)
+    error_formatter = logging.Formatter(
+        "%(asctime)s:%(levelname)s:%(message)s"
+    )
+    error_handler.setFormatter(error_formatter)
+    root.addHandler(error_handler)
+
+    # Apply custom log file if specified
     if args.log_file:
-        import logging
-        file_handler = logging.FileHandler(args.log_file, mode="a", encoding="utf-8")
-        file_handler.setLevel(logging.DEBUG if args.debug else logging.INFO)
+        log_file_path = args.log_file
+        if not os.path.isabs(log_file_path) and not log_file_path.startswith("logs/"):
+            log_file_path = os.path.join("logs", log_file_path)
+            
+        file_handler = logging.FileHandler(log_file_path, mode="a", encoding="utf-8")
+        file_handler.setLevel(log_level)
         formatter = logging.Formatter(
             "%(asctime)s [%(levelname)-7s] %(name)s: %(message)s",
             datefmt="%H:%M:%S",
         )
         file_handler.setFormatter(formatter)
-        root = logging.getLogger()
         root.addHandler(file_handler)
-
-    if args.debug:
-        root.setLevel(logging.DEBUG)
 
     import asyncio
     asyncio.run(main(
         scrape_pages=args.pages,
         scrape_visible=args.visible,
         scrape_debug=args.debug,
+        skip_part_a=args.skip_part_a,
+        stage_range=args.stage_range,
+        db_limit=args.db_limit,
+        skip_db=args.skip_db,
+        scrape_missing_24h=args.scrape_missing_24h,
     ))

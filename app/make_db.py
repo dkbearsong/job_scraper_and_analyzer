@@ -38,7 +38,8 @@ def make_db():
             "company",
             "office",
             "job_embeddings",
-            "archetype_embeddings"
+            "archetype_embeddings",
+            "token_usage_log"
         ],
         "columns": [
             {
@@ -62,7 +63,9 @@ def make_db():
                 "my_summary_score": "INT",
                 "skip": "BOOLEAN",
                 "flexibility":"VARCHAR(100)",
-                "source":"VARCHAR(255)"
+                "source":"VARCHAR(255)",
+                "skills": "JSONB",
+                "responsibilities": "JSONB"
             },
             {
                 "id": "INT PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
@@ -97,6 +100,17 @@ def make_db():
                 "responsibilities_embedding": "FLOAT8[]",
                 "metadata": "JSONB",
                 "date_generated": "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+            },
+            {
+                "id": "INT PRIMARY KEY GENERATED ALWAYS AS IDENTITY",
+                "run_id": "VARCHAR(100) NOT NULL",
+                "run_timestamp": "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                "provider": "VARCHAR(100) NOT NULL",
+                "model": "VARCHAR(100) NOT NULL",
+                "operation": "VARCHAR(100) NOT NULL",
+                "input_tokens": "INTEGER NOT NULL",
+                "output_tokens": "INTEGER NOT NULL",
+                "total_tokens": "INTEGER NOT NULL"
             }
         ]
     }

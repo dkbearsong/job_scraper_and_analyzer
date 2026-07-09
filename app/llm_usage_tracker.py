@@ -69,6 +69,15 @@ class LLMUsageTracker:
         """Record a single LLM API call."""
         if not self._enabled:
             return
+
+        if operation == "embedding" and input_tokens == 0:
+            import re
+            match = re.search(r"(\d+)\s+chars", context)
+            if match:
+                char_len = int(match.group(1))
+                input_tokens = max(1, char_len // 4)
+                total_tokens = input_tokens
+
         record = LLMUsageRecord(
             provider=provider,
             model=model,
@@ -98,29 +107,43 @@ class LLMUsageTracker:
             return
 
         # Determine which provider format this response uses by checking
-        # the attributes available on the usage object.
-        usage_obj = getattr(response, "usage", None)
-        usage_meta = getattr(response, "usage_metadata", None)
+        # the attributes/keys available.
+        if isinstance(response, dict):
+            usage_obj = response.get("usage")
+            usage_meta = response.get("usage_metadata")
+        else:
+            usage_obj = getattr(response, "usage", None)
+            usage_meta = getattr(response, "usage_metadata", None)
 
         try:
             if usage_meta is not None:
                 # ── Gemini (google.genai) ──
-                input_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
-                output_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
-                total_tokens = getattr(usage_meta, "total_token_count", 0) or 0
-            elif usage_obj is not None:
-                # Check for Anthropic-style fields first
-                inp = getattr(usage_obj, "input_tokens", None)
-                if inp is not None:
-                    # ── Anthropic ──
-                    input_tokens = inp or 0
-                    output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
-                    total_tokens = input_tokens + output_tokens
+                if isinstance(usage_meta, dict):
+                    input_tokens = usage_meta.get("prompt_token_count", 0) or 0
+                    output_tokens = usage_meta.get("candidates_token_count", 0) or 0
+                    total_tokens = usage_meta.get("total_token_count", 0) or 0
                 else:
-                    # ── OpenAI / OpenAI-compatible (LM Studio, OpenRouter, Ollama) ──
-                    input_tokens = getattr(usage_obj, "prompt_tokens", 0) or 0
-                    output_tokens = getattr(usage_obj, "completion_tokens", 0) or 0
-                    total_tokens = getattr(usage_obj, "total_tokens", 0) or 0
+                    input_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
+                    output_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
+                    total_tokens = getattr(usage_meta, "total_token_count", 0) or 0
+            elif usage_obj is not None:
+                if isinstance(usage_obj, dict):
+                    input_tokens = usage_obj.get("prompt_tokens", 0) or 0
+                    output_tokens = usage_obj.get("completion_tokens", 0) or 0
+                    total_tokens = usage_obj.get("total_tokens", 0) or 0
+                else:
+                    # Check for Anthropic-style fields first
+                    inp = getattr(usage_obj, "input_tokens", None)
+                    if inp is not None:
+                        # ── Anthropic ──
+                        input_tokens = inp or 0
+                        output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
+                        total_tokens = input_tokens + output_tokens
+                    else:
+                        # ── OpenAI / OpenAI-compatible (LM Studio, OpenRouter, Ollama) ──
+                        input_tokens = getattr(usage_obj, "prompt_tokens", 0) or 0
+                        output_tokens = getattr(usage_obj, "completion_tokens", 0) or 0
+                        total_tokens = getattr(usage_obj, "total_tokens", 0) or 0
         except Exception:
             pass
 
@@ -230,18 +253,39 @@ class LLMUsageTracker:
                 print(f"  {key}:")
                 print(f"    Calls:     {data['calls']}")
                 print(f"    Input:     {data['input_tokens']:,} tokens")
-                print(f"    Output:    {data['output_tokens']:,} tokens")
+                if list(data['operations']) == ["embedding"]:
+                    print(f"    Output:    0 tokens - embedding")
+                else:
+                    print(f"    Output:    {data['output_tokens']:,} tokens")
                 print(f"    Total:     {data['total_tokens']:,} tokens")
                 print(f"    Ops:       {', '.join(data['operations'])}")
             print("-" * 60)
 
         if summary["by_operation"]:
             print("By Operation:")
-            for op, data in sorted(summary["by_operation"].items()):
-                print(f"  {op}:")
+            # Sort by order of occurrence in the pipeline stages
+            order = ["extraction", "embedding", "classification", "reranking"]
+            def get_sort_key(item):
+                op_name = item[0]
+                try:
+                    return order.index(op_name)
+                except ValueError:
+                    return len(order)
+
+            for op, data in sorted(summary["by_operation"].items(), key=get_sort_key):
+                display_op = op
+                if op == "classification":
+                    display_op = "classification (Cheap LLM)"
+                elif op == "reranking":
+                    display_op = "reranking (Strong LLM)"
+
+                print(f"  {display_op}:")
                 print(f"    Calls:     {data['calls']}")
                 print(f"    Input:     {data['input_tokens']:,} tokens")
-                print(f"    Output:    {data['output_tokens']:,} tokens")
+                if op == "embedding":
+                    print(f"    Output:    0 tokens - embedding")
+                else:
+                    print(f"    Output:    {data['output_tokens']:,} tokens")
                 print(f"    Total:     {data['total_tokens']:,} tokens")
 
         print("=" * 60)

@@ -87,11 +87,47 @@ class ArchetypeManager:
         document = f"Job Title: {title}. Description: {description} Skills: {skills}"
         return document
 
+    def _get_job_embedding(self, job_data: Dict[str, Any], embedding_key: str, text: str) -> Optional[np.ndarray]:
+        """
+        Helper to retrieve a pre-computed job embedding from the job dict,
+        falling back to generating a new embedding from text if not available.
+
+        Args:
+            job_data: The full job dictionary.
+            embedding_key: Key in job_data['embeddings'] (e.g. 'title_vector').
+            text: Fallback text to embed if no pre-computed embedding exists.
+
+        Returns:
+            A numpy array embedding, or None if neither source is available.
+        """
+        # 1. Try pre-computed embedding from the job dict
+        pre_computed = job_data.get("embeddings", {}).get(embedding_key)
+        if pre_computed is not None:
+            # Convert Python list → numpy array if needed (e.g. loaded from DB)
+            if isinstance(pre_computed, list):
+                if len(pre_computed) == 0:
+                    return None  # empty list is not a valid embedding
+                return np.array(pre_computed, dtype=np.float32)
+            if isinstance(pre_computed, np.ndarray):
+                if pre_computed.size == 0:
+                    return None  # empty array is not a valid embedding
+                return pre_computed
+
+        # 2. Fall back to generating a fresh embedding from text
+        if text:
+            return self.vector_engine.get_embeddings([text])[0]
+
+        return None
+
     def compare_job_to_archetypes(self, job_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Compares a single job against all loaded archetypes.
         Returns a list of matches with detailed similarity scores (title, skills, responsibilities)
         and metadata. This enables the weighted scoring formula in Stage 5D.
+
+        Uses pre-computed embeddings from the job dict when available (Stage 2 output)
+        to avoid redundant embedding generation and ensure consistency with the
+        pipeline's configured embedding provider.
         """
         if not self.archetypes:
             return []
@@ -101,24 +137,20 @@ class ArchetypeManager:
         job_skills = job_data.get("features", {}).get("skills", [])
         job_requirements = job_data.get("features", {}).get("requirements", [])
         job_description = job_data.get("features", {}).get("description", "")
-        
+
         # Use requirements if available, otherwise fall back to description
         job_responsibilities_text = "\n".join(job_requirements) if job_requirements else job_description
-        
-        # 2. Generate embeddings for each job component
-        job_title_embedding = None
-        job_skills_embedding = None
-        job_responsibilities_embedding = None
-        
-        if job_title:
-            job_title_embedding = self.vector_engine.get_embeddings([job_title])[0]
-        
-        if job_skills:
-            skills_text = ", ".join(job_skills)
-            job_skills_embedding = self.vector_engine.get_embeddings([skills_text])[0]
-        
-        if job_responsibilities_text:
-            job_responsibilities_embedding = self.vector_engine.get_embeddings([job_responsibilities_text])[0]
+
+        # Prepare fallback text strings for embedding generation when no pre-computed ones exist
+        skills_text = ", ".join(job_skills) if job_skills else ""
+
+        # 2. Retrieve or generate embeddings for each job component
+        #    Priority: pre-computed embeddings > fresh generation from text
+        job_title_embedding = self._get_job_embedding(job_data, "title_vector", job_title)
+        job_skills_embedding = self._get_job_embedding(job_data, "skills_vector", skills_text)
+        job_responsibilities_embedding = self._get_job_embedding(
+            job_data, "requirements_vector", job_responsibilities_text
+        )
 
         matches = []
         for archetype in self.archetypes:
@@ -126,19 +158,21 @@ class ArchetypeManager:
             title_similarity = 0.0
             skills_similarity = 0.0
             responsibilities_similarity = 0.0
-            
+
             if job_title_embedding is not None and archetype.title_embedding is not None:
                 title_similarity = self.vector_engine.compute_similarity(job_title_embedding, archetype.title_embedding)
-            
+
             if job_skills_embedding is not None and archetype.skills_embedding is not None:
                 skills_similarity = self.vector_engine.compute_similarity(job_skills_embedding, archetype.skills_embedding)
-            
+
             if job_responsibilities_embedding is not None and archetype.responsibilities_embedding is not None:
-                responsibilities_similarity = self.vector_engine.compute_similarity(job_responsibilities_embedding, archetype.responsibilities_embedding)
-            
+                responsibilities_similarity = self.vector_engine.compute_similarity(
+                    job_responsibilities_embedding, archetype.responsibilities_embedding
+                )
+
             # Calculate combined similarity for sorting (simple average as fallback)
             combined_score = (title_similarity + skills_similarity + responsibilities_similarity) / 3.0
-            
+
             matches.append({
                 "archetype_name": archetype.name,
                 "archetype_type": archetype.type,
@@ -148,7 +182,7 @@ class ArchetypeManager:
                 "responsibility_similarity": float(responsibilities_similarity),
                 "metadata": archetype.metadata
             })
-        
+
         # Sort matches by highest combined score first
         return sorted(matches, key=lambda x: x['similarity_score'], reverse=True)
 
