@@ -1,5 +1,6 @@
 # Libraries
 import os
+import asyncio
 from dotenv import load_dotenv
 import json
 from docx import Document
@@ -259,6 +260,14 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 def is_missing_value(val) -> bool:
     if val is None:
         return True
+    if isinstance(val, (list, tuple, set)):
+        if not val:
+            return True
+        return all(is_missing_value(x) for x in val)
+    if isinstance(val, dict):
+        if not val:
+            return True
+        return all(is_missing_value(x) for x in val.values())
     if isinstance(val, str):
         v = val.strip().lower()
         return v in ("", "na", "n/a", "not specified", "none", "unknown", "n/a (us or canada only)")
@@ -318,6 +327,104 @@ def extract_job_locations(job: dict) -> List[str]:
             deduped.append(l)
     return deduped
 
+def is_country_location(location_str: str) -> bool:
+    if not location_str:
+        return False
+    loc_clean = location_str.strip().lower()
+    country_names = {
+        "united states", "usa", "u.s.a.", "united states of america", "us", "u.s.",
+        "canada", "united kingdom", "uk", "u.k.", "great britain", "gb", "england",
+        "germany", "france", "australia", "india", "singapore", "japan", "poland",
+        "ireland", "spain", "italy", "brazil", "mexico", "switzerland", "netherlands",
+        "sweden", "finland", "south korea", "philippines", "israel"
+    }
+    return loc_clean in country_names
+
+def get_country_of_location(location_str: str) -> Optional[str]:
+    """
+    Tries to determine the country of a given location string without using geocoding.
+    Returns the lowercase standard country name or None.
+    """
+    if not location_str:
+        return None
+    loc_clean = location_str.strip().lower()
+    
+    country_mappings = {
+        "united states": "united states",
+        "united states of america": "united states",
+        "usa": "united states",
+        "u.s.a.": "united states",
+        "us": "united states",
+        "u.s.": "united states",
+        
+        "canada": "canada",
+        
+        "united kingdom": "united kingdom",
+        "uk": "united kingdom",
+        "u.k.": "united kingdom",
+        "great britain": "united kingdom",
+        "gb": "united kingdom",
+        "england": "united kingdom",
+        "scotland": "united kingdom",
+        "wales": "united kingdom",
+        "northern ireland": "united kingdom",
+        
+        "india": "india",
+        
+        "germany": "germany",
+        "deutschland": "germany",
+        
+        "france": "france",
+        "australia": "australia",
+        "singapore": "singapore",
+        "japan": "japan",
+        "ireland": "ireland",
+    }
+    
+    if loc_clean in country_mappings:
+        return country_mappings[loc_clean]
+        
+    words = re.findall(r'[a-zA-Z0-9]+', loc_clean)
+    
+    for word in words:
+        if word in country_mappings:
+            if word == "in" and len(words) > 1:
+                if words[-1] == "in":
+                    return "india"
+                continue
+            return country_mappings[word]
+            
+    # Check US states
+    us_states = {
+        "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia", "ks", "ky", "la", "me", "md",
+        "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny", "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc",
+        "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv", "wi", "wy", "pr", "vi", "gu", "mp", "as",
+        "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida", "georgia",
+        "hawaii", "idaho", "illinois", "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland",
+        "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska", "nevada", "new hampshire",
+        "new jersey", "new mexico", "new york", "north carolina", "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+        "rhode island", "south carolina", "south dakota", "tennessee", "texas", "utah", "vermont", "virginia", "washington",
+        "west virginia", "wisconsin", "wyoming"
+    }
+    
+    # Check Canada provinces
+    ca_provinces = {
+        "ab", "bc", "mb", "nb", "nl", "ns", "nt", "nu", "on", "pe", "qc", "sk", "yt",
+        "alberta", "british columbia", "manitoba", "new brunswick", "newfoundland", "nova scotia", "ontario", "prince edward island", "quebec", "saskatchewan"
+    }
+    
+    for word in words:
+        if word in us_states:
+            return "united states"
+        if word in ca_provinces:
+            return "canada"
+            
+    for name, canonical in country_mappings.items():
+        if len(name.split()) > 1 and name in loc_clean:
+            return canonical
+            
+    return None
+
 def check_location_proximity(job: dict, user_preferences: dict) -> bool:
     """
     Returns True if the job should be SKIPPED because it is outside the target city range.
@@ -336,9 +443,11 @@ def check_location_proximity(job: dict, user_preferences: dict) -> bool:
     if not job_locations:
         return False
         
-    # Check if any location contains "remote"
+    # Check if any location contains "remote" or is a country name
     for loc in job_locations:
         if 'remote' in loc.lower():
+            return False
+        if is_country_location(loc):
             return False
             
     max_range = user_preferences.get('target_city_range', 25)
@@ -347,7 +456,16 @@ def check_location_proximity(job: dict, user_preferences: dict) -> bool:
     for target in target_cities:
         target_clean = target.strip().lower()
         
-        # Exact/substring match first to avoid slow geocoding
+        # 1. Country target checks: if target is a country, match job locations in the same country
+        if is_country_location(target):
+            target_country = get_country_of_location(target)
+            if target_country:
+                for loc in job_locations:
+                    loc_country = get_country_of_location(loc)
+                    if loc_country == target_country:
+                        return False  # Match! Do not skip this job.
+        
+        # 2. Exact/substring match first to avoid slow geocoding
         for loc in job_locations:
             loc_clean = loc.strip().lower()
             if target_clean in loc_clean or loc_clean in target_clean:
@@ -884,10 +1002,15 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
 
     # ── Fallback to legacy path if adapters didn't run ──
     if not used_adapters:
+        if not os.path.exists(scrapers_config_path):
+            reason = f"no {scrapers_config_path} found"
+        else:
+            reason = f"no enabled adapters loaded from {scrapers_config_path} or adapter run failed"
         all_scraped = await _pipeline_stage_scrape_legacy(
             dp, user_preferences, sites, skip_db, verbose,
             enable_part_b=enable_part_b, skip_part_a=resolved_skip_part_a,
             db_limit=db_limit,
+            reason=reason,
         )
 
     # ── Also run fallback if explicitly configured to do so ──
@@ -897,6 +1020,7 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
             dp, user_preferences, sites, skip_db, verbose,
             enable_part_b=enable_part_b, skip_part_a=resolved_skip_part_a,
             db_limit=db_limit,
+            reason="run_fallback_after_adapters is enabled",
         )
         if fallback_jobs:
             print(f"Merging {len(fallback_jobs)} fallback jobs with {len(all_scraped)} adapter jobs (deduplicating by link)...")
@@ -930,6 +1054,34 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
                 if link:
                     merged[link] = job
             all_scraped = list(merged.values())
+
+    # ── Sync in-memory descriptions from DB for any jobs missing them ──
+    if all_scraped and not skip_db:
+        print("Syncing in-memory descriptions from database for jobs missing them...")
+        sync_count = 0
+        for job in all_scraped:
+            if not job.get("description"):
+                job_id = job.get("id")
+                link = job.get("link") or job.get("url")
+                if job_id or link:
+                    try:
+                        if job_id:
+                            query = "SELECT job_summary FROM job WHERE id = %s"
+                            param = (job_id,)
+                        else:
+                            query = "SELECT job_summary FROM job WHERE link = %s"
+                            param = (link,)
+                        rows = dp.conn.execute_sql(query, param, fetch=True)
+                        if rows:
+                            row = rows[0]
+                            summary = row.get("job_summary") if isinstance(row, dict) else row[0]
+                            if summary:
+                                job["description"] = summary
+                                sync_count += 1
+                    except Exception as e:
+                        print(f"Warning: failed to fetch description from DB for link '{link}': {e}")
+        if sync_count > 0:
+            print(f"Synced {sync_count} job description(s) from database to memory.")
 
     # ── Post-process: remove jobs without descriptions and log them ──
     if all_scraped and not skip_db:
@@ -996,6 +1148,26 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
         
         # If the job is already in the processed format (from previous stage), use it
         if 'features' in raw_job and 'metadata' in raw_job:
+            features = raw_job['features']
+            desc = features.get('description', '')
+            if desc:
+                if is_missing_value(features.get('pay')):
+                    features['pay'] = text_processor.extract_salary(desc)
+                if is_missing_value(features.get('seniority')):
+                    features['seniority'] = text_processor.detect_seniority(desc, title=features.get('title', ''))
+                if is_missing_value(features.get('work_type')):
+                    features['work_type'] = text_processor.detect_work_type(desc)
+                if is_missing_value(features.get('timezone')):
+                    features['timezone'] = text_processor.detect_timezone(desc)
+            # Normalize work_type capitalization (Remote/Hybrid/Onsite)
+            if features.get('work_type'):
+                wt_lower = features['work_type'].lower()
+                if 'remote' in wt_lower:
+                    features['work_type'] = 'Remote'
+                elif 'hybrid' in wt_lower:
+                    features['work_type'] = 'Hybrid'
+                elif 'onsite' in wt_lower or 'on-site' in wt_lower:
+                    features['work_type'] = 'Onsite'
             processed_job_pool.append(raw_job)
             continue
 
@@ -1023,9 +1195,9 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             "features": {
                 "title": title,
                 "description": description,
-                "pay": pay if pay else text_processor.extract_salary(description),
-                "seniority": text_processor.detect_seniority(description),
-                "work_type": work_type if work_type and work_type != "NA" else text_processor.detect_work_type(description),
+                "pay": pay if not is_missing_value(pay) else text_processor.extract_salary(description),
+                "seniority": text_processor.detect_seniority(description, title=title),
+                "work_type": work_type if not is_missing_value(work_type) else text_processor.detect_work_type(description),
                 "timezone": text_processor.detect_timezone(description),
             },
             "embeddings": {
@@ -1033,6 +1205,14 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
                 "skills_vector": None,
             },
         }
+        if extracted_data["features"].get('work_type'):
+            wt_lower = extracted_data["features"]['work_type'].lower()
+            if 'remote' in wt_lower:
+                extracted_data["features"]['work_type'] = 'Remote'
+            elif 'hybrid' in wt_lower:
+                extracted_data["features"]['work_type'] = 'Hybrid'
+            elif 'onsite' in wt_lower or 'on-site' in wt_lower:
+                extracted_data["features"]['work_type'] = 'Onsite'
         processed_job_pool.append(extracted_data)
 
     print(f"Successfully extracted data for {len(processed_job_pool)} jobs.")
@@ -1048,30 +1228,42 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             print("[Model Mgmt] WARNING: extraction model may not be fully loaded yet.")
 
     print(f"Starting AI/LLM Extraction Pass on {len(processed_job_pool)} jobs...")
-    for index, job in enumerate(processed_job_pool):
+    from app.ai_limiter import AILimiter, run_in_thread
+    extraction_limiter = AILimiter("stage_2_extraction", _extraction_llm)
+
+    async def process_extraction(index, job):
         if verbose:
             print(f"Extraction job {index + 1}/{len(processed_job_pool)}: {job['features']['title']}")
 
         if not job or 'features' not in job:
             error_logger_continue(f"Warning: job at index {index} has invalid structure")
-            continue
+            return
 
         description = job['features'].get('description', '')
         if not description:
             error_logger_continue(f"Warning: job at index {index} has no description")
-            continue
+            return
 
-        # Extract skills, requirements and summary via LLM
-        ai_data = call_llm_for_extraction(ai_engine, description, provider_name=_extraction_llm)
+        # Extract skills, requirements and summary via LLM using AILimiter
+        est_tokens = (len(description) // 4) + 1000
+        async with extraction_limiter.semaphore:
+            await extraction_limiter.wait(est_tokens)
+            ai_data = await run_in_thread(call_llm_for_extraction, ai_engine, description, provider_name=_extraction_llm)
 
         skills = []
         requirements = []
         summary = ""
+        llm_pay = None
+        llm_work_type = None
+        llm_seniority = None
 
         if isinstance(ai_data, dict):
             skills = ai_data.get('skills', [])
             requirements = ai_data.get('requirements', [])
             summary = ai_data.get('summary', "")
+            llm_pay = ai_data.get('pay_range')
+            llm_work_type = ai_data.get('work_type')
+            llm_seniority = ai_data.get('seniority')
         elif isinstance(ai_data, str):
             try:
                 parsed = json.loads(ai_data)
@@ -1079,14 +1271,88 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
                     skills = parsed.get('skills', [])
                     requirements = parsed.get('requirements', [])
                     summary = parsed.get('summary', "")
+                    llm_pay = parsed.get('pay_range')
+                    llm_work_type = parsed.get('work_type')
+                    llm_seniority = parsed.get('seniority')
             except Exception:
                 pass
+
+        # Normalize extracted values to prevent type mismatches
+        def to_string(v) -> str:
+            if v is None:
+                return ""
+            if isinstance(v, list):
+                return " ".join(to_string(x) for x in v if x is not None)
+            if isinstance(v, dict):
+                return " ".join(to_string(x) for x in v.values() if x is not None)
+            return str(v).strip()
+
+        if isinstance(skills, list):
+            skills = [to_string(s) for s in skills if s]
+        else:
+            skills = [to_string(skills)] if skills else []
+
+        if isinstance(requirements, list):
+            requirements = [to_string(r) for r in requirements if r]
+        else:
+            requirements = [to_string(requirements)] if requirements else []
+
+        summary = to_string(summary)
+
+        if isinstance(llm_pay, list):
+            llm_pay = " - ".join(to_string(p) for p in llm_pay if p)
+        else:
+            llm_pay = to_string(llm_pay)
+
+        if isinstance(llm_work_type, list):
+            llm_work_type = llm_work_type[0] if llm_work_type else ""
+        llm_work_type = to_string(llm_work_type)
+
+        if isinstance(llm_seniority, list):
+            llm_seniority = " ".join(to_string(s) for s in llm_seniority if s)
+        llm_seniority = to_string(llm_seniority)
 
         features = job['features']
         features['skills'] = skills or []
         features['requirements'] = requirements or []
         features['summary'] = summary or ""
-        time.sleep(0.5)
+
+        # Update pay and work_type using LLM fallback if deterministic extraction missed them
+        if llm_pay and is_missing_value(features.get('pay')):
+            features['pay'] = llm_pay
+        if llm_work_type and is_missing_value(features.get('work_type')):
+            # Normalize work_type from LLM to match capitalization
+            wt = llm_work_type.strip().lower()
+            if 'remote' in wt:
+                features['work_type'] = 'Remote'
+            elif 'hybrid' in wt:
+                features['work_type'] = 'Hybrid'
+            elif 'onsite' in wt or 'on-site' in wt:
+                features['work_type'] = 'Onsite'
+            else:
+                features['work_type'] = 'Unknown'
+
+        # Prefer LLM seniority if extracted successfully
+        if llm_seniority and not is_missing_value(llm_seniority) and llm_seniority.lower() != "unknown":
+            s_lower = llm_seniority.strip().lower()
+            if "c-suite" in s_lower or "executive" in s_lower or "vp" in s_lower:
+                features['seniority'] = 'C-Suite'
+            elif "manager" in s_lower or "director" in s_lower or "head" in s_lower or "management" in s_lower:
+                features['seniority'] = 'Management'
+            elif "senior" in s_lower or "sr" in s_lower or "principal" in s_lower or "staff" in s_lower:
+                features['seniority'] = 'Senior'
+            elif "mid-level" in s_lower or "intermediate" in s_lower or "mid" in s_lower:
+                features['seniority'] = 'Mid-Level'
+            elif "junior" in s_lower or "jr" in s_lower or "entry" in s_lower or "associate" in s_lower or "intern" in s_lower:
+                features['seniority'] = 'Junior'
+            elif "lead" in s_lower:
+                features['seniority'] = 'Lead'
+            else:
+                features['seniority'] = llm_seniority.strip()
+
+    # Process all extraction tasks in parallel/sequential according to limiter
+    extraction_tasks = [process_extraction(idx, job) for idx, job in enumerate(processed_job_pool)]
+    await asyncio.gather(*extraction_tasks)
 
     if is_lm_studio_extraction:
         extraction_model = ai_engine.extraction_model
@@ -1107,41 +1373,42 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             print("[Model Mgmt] WARNING: embeddings model may not be fully loaded yet.")
 
     print(f"Starting AI/LLM Embeddings Pass on {len(processed_job_pool)} jobs...")
-    for index, job in enumerate(processed_job_pool):
+    embedding_limiter = AILimiter("stage_2_embedding", _embeddings_llm)
+
+    async def process_embeddings(index, job):
         if verbose:
             print(f"Embedding job {index + 1}/{len(processed_job_pool)}: {job['features']['title']}")
 
         if not job or 'features' not in job:
-            continue
+            return
 
         features = job['features']
 
+        # Helper to generate embedding via limiter and run_in_thread
+        async def get_embedding(text):
+            if not text or not text.strip():
+                return []
+            est_tokens = (len(text) // 4) + 16
+            async with embedding_limiter.semaphore:
+                await embedding_limiter.wait(est_tokens)
+                return await run_in_thread(generate_embeddings, ai_engine, text, provider_name=_embeddings_llm)
+
         # Vector generation
         title_text = features.get('title', '')
-        if title_text:
-            job['embeddings']['title_vector'] = generate_embeddings(ai_engine, title_text, provider_name=_embeddings_llm)
-        else:
-            job['embeddings']['title_vector'] = []
+        job['embeddings']['title_vector'] = await get_embedding(title_text)
 
         skills_text = ", ".join(features.get('skills', []))
-        if skills_text:
-            job['embeddings']['skills_vector'] = generate_embeddings(ai_engine, skills_text, provider_name=_embeddings_llm)
-        else:
-            job['embeddings']['skills_vector'] = []
+        job['embeddings']['skills_vector'] = await get_embedding(skills_text)
 
         requirements_text = ", ".join(features.get('requirements', []))
-        if requirements_text:
-            job['embeddings']['requirements_vector'] = generate_embeddings(ai_engine, requirements_text, provider_name=_embeddings_llm)
-        else:
-            job['embeddings']['requirements_vector'] = []
+        job['embeddings']['requirements_vector'] = await get_embedding(requirements_text)
 
         summary_text = features.get('summary', '')
-        if summary_text:
-            job['embeddings']['description_vector'] = generate_embeddings(ai_engine, summary_text, provider_name=_embeddings_llm)
-        else:
-            job['embeddings']['description_vector'] = []
+        job['embeddings']['description_vector'] = await get_embedding(summary_text)
 
-        time.sleep(0.5)
+    # Process all embedding tasks in parallel/sequential according to limiter
+    embedding_tasks = [process_embeddings(idx, job) for idx, job in enumerate(processed_job_pool)]
+    await asyncio.gather(*embedding_tasks)
 
     if is_lm_studio_embeddings:
         embeddings_model = ai_engine.embeddings_model
@@ -1299,18 +1566,32 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
         resume_text = setup_data.get("resume", "")
         profile_text = setup_data.get("user_profile", "")
 
+    resume_path_env = os.getenv("RESUME", "")
+    resume_path_resolved = resume_path_env if (resume_path_env and os.path.exists(resume_path_env)) else "archetype_profiles/resume_cache.json"
+
+    profile_path_env = os.getenv("PROFILE", "")
+    profile_path_resolved = profile_path_env if (profile_path_env and os.path.exists(profile_path_env)) else "archetype_profiles/user_profile_cache.json"
+
     resume_data = extract_and_cache_profile(
         ai_engine,
-        os.getenv("RESUME", "") if not resume_text else "archetype_profiles/resume_cache.json",
+        resume_path_resolved,
         resume_text if resume_text else "No resume text provided.",
         "archetype_profiles/resume_cache.json"
     )
     profile_data = extract_and_cache_profile(
         ai_engine,
-        os.getenv("PROFILE", "") if not profile_text else "archetype_profiles/user_profile_cache.json",
+        profile_path_resolved,
         profile_text if profile_text else "No profile text provided.",
         "archetype_profiles/user_profile_cache.json"
     )
+
+    resume_mtime = None
+    if resume_path_resolved and os.path.exists(resume_path_resolved):
+        resume_mtime = os.path.getmtime(resume_path_resolved)
+
+    profile_mtime = None
+    if profile_path_resolved and os.path.exists(profile_path_resolved):
+        profile_mtime = os.path.getmtime(profile_path_resolved)
 
     all_archetypes = ARCHETYPES_CONFIG + [
         {
@@ -1319,7 +1600,8 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
             "skills": "\n".join(resume_data.get("skills", [])),
             "responsibilities": "\n".join(resume_data.get("requirements", [])),
             "summary": resume_data.get("summary", ""),
-            "type": "resume"
+            "type": "resume",
+            "source_mtime": resume_mtime
         },
         {
             "name": "User Profile",
@@ -1327,7 +1609,8 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
             "skills": "\n".join(profile_data.get("skills", [])),
             "responsibilities": "\n".join(profile_data.get("requirements", [])),
             "summary": profile_data.get("summary", ""),
-            "type": "user_profile"
+            "type": "user_profile",
+            "source_mtime": profile_mtime
         }
     ]
 
@@ -1344,7 +1627,37 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
         if cached_arch:
             title_emb = cached_arch.get('title_embedding')
             if title_emb and len(title_emb) == expected_dim:
-                cache_valid = True
+                source_mtime = arch_config.get("source_mtime")
+                if source_mtime is not None:
+                    db_meta = cached_arch.get('metadata') or {}
+                    db_mtime = db_meta.get("source_mtime")
+                    if db_mtime is not None:
+                        if db_mtime >= source_mtime:
+                            cache_valid = True
+                        else:
+                            print(f"Archetype '{arch_config['name']}' source file modified since embedding generation. Invalidating cache.")
+                    else:
+                        # Fallback to date_generated database timestamp comparison
+                        db_dt = cached_arch.get('date_generated')
+                        if db_dt:
+                            import datetime
+                            file_dt = datetime.datetime.fromtimestamp(source_mtime)
+                            if db_dt.tzinfo is not None:
+                                file_dt_tz = datetime.datetime.fromtimestamp(source_mtime, tz=datetime.timezone.utc)
+                                if db_dt >= file_dt_tz:
+                                    cache_valid = True
+                                else:
+                                    print(f"Archetype '{arch_config['name']}' source file modified since DB generation timestamp (with tz). Invalidating cache.")
+                            else:
+                                if db_dt >= file_dt:
+                                    cache_valid = True
+                                else:
+                                    print(f"Archetype '{arch_config['name']}' source file modified since DB generation timestamp. Invalidating cache.")
+                        else:
+                            print(f"Archetype '{arch_config['name']}' has no modification timestamp metadata or database timestamp. Invalidating cache.")
+                else:
+                    # Config-driven benchmark archetypes do not map to files
+                    cache_valid = True
 
         if cache_valid:
             archetype_manager.add_archetype(Archetype(
@@ -1357,13 +1670,14 @@ async def pipeline_stage_archetype_integration(jobs: List[Dict], ai_engine: Opti
             ))
         else:
             if cached_arch:
-                print(f"Cached archetype '{arch_config['name']}' has dimension mismatch (expected {expected_dim}). Regenerating...")
+                print(f"Cached archetype '{arch_config['name']}' is invalid (modified source or dimension mismatch). Regenerating...")
             else:
                 print(f"Generating new embeddings for archetype: {arch_config['name']}")
             new_arch = archetype_manager.load_archetype(
                 name=arch_config['name'],
                 archetype_data=arch_config,
-                archetype_type=arch_config.get("type", "benchmark")
+                archetype_type=arch_config.get("type", "benchmark"),
+                metadata={"source_mtime": arch_config.get("source_mtime")} if arch_config.get("source_mtime") is not None else None
             )
             # Persist to DB for future runs
             if dp and not skip_db:
@@ -1569,17 +1883,35 @@ async def pipeline_stage_cheap_llm(jobs: List[Dict], setup_data: Optional[dict] 
         batch_size=5
     )
 
-    # Persist results
+    # Persist results to database
     if dp and not skip_db:
         print("Persisting Stage 6 results to database...")
         try:
-            dp.save_cheap_llm_results(shortlisted_jobs)
-            print(f"Persisted {len(shortlisted_jobs)} cheap LLM results.")
+            # 1. Save cheap LLM results for ALL jobs that were classified
+            classified_jobs = [j for j in jobs if 'cheap_llm_result' in j]
+            dp.save_cheap_llm_results(classified_jobs)
+            print(f"Persisted {len(classified_jobs)} cheap LLM results.")
+            
+            # 2. Update job table skip status for jobs classified as 'skip'
+            skipped_ids = [j['metadata']['job_id'] for j in jobs if j.get('cheap_llm_result', {}).get('decision') == 'skip']
+            if skipped_ids:
+                dp.bulk_update_skip_status(skipped_ids)
+                print(f"Marked {len(skipped_ids)} skipped jobs as skip=True in the database.")
         except Exception as e:
             error_logger_continue(f"Stage 6 persistence failed: {e}")
 
-    print(f"Stage 6 complete: {len(shortlisted_jobs)} jobs shortlisted.")
-    return shortlisted_jobs
+    # 3. Clean up/remove skipped jobs from the in-memory pool in-place to free memory
+    shortlisted_ids = {j['metadata']['job_id'] for j in shortlisted_jobs}
+    i = len(jobs) - 1
+    while i >= 0:
+        job = jobs[i]
+        job_id = job.get('metadata', {}).get('job_id')
+        if job_id not in shortlisted_ids:
+            jobs.pop(i)
+        i -= 1
+
+    print(f"Stage 6 complete: {len(jobs)} active jobs remaining in memory pool.")
+    return jobs
 
 
 # =====================================================
@@ -1637,8 +1969,18 @@ async def pipeline_stage_strong_llm(jobs: List[Dict], setup_data: Optional[dict]
         except Exception as e:
             error_logger_continue(f"Stage 7 persistence failed: {e}")
 
-    print(f"Stage 7 complete: {len(deeply_analyzed_jobs)} jobs deeply analyzed.")
-    return deeply_analyzed_jobs
+    # Remove jobs from memory pool that did not proceed to deep analysis in-place
+    analyzed_ids = {j['metadata']['job_id'] for j in deeply_analyzed_jobs}
+    i = len(jobs) - 1
+    while i >= 0:
+        job = jobs[i]
+        job_id = job.get('metadata', {}).get('job_id')
+        if job_id not in analyzed_ids:
+            jobs.pop(i)
+        i -= 1
+
+    print(f"Stage 7 complete: {len(jobs)} jobs deeply analyzed and remaining in memory pool.")
+    return jobs
 
 
 # =====================================================
@@ -1673,15 +2015,32 @@ async def pipeline_stage_final_queue(jobs: List[Dict], dp: Optional[DataPuller] 
         try:
             dp.save_final_queue(final_queue)
             print(f"Persisted {len(final_queue)} jobs to final queue.")
+            
+            # Update job table skip status for jobs recommended to skip
+            skipped_ids = [j['metadata']['job_id'] for j in final_queue if j.get('priority') == 'skip' or j.get('apply_recommendation') == 'skip']
+            if skipped_ids:
+                dp.bulk_update_skip_status(skipped_ids)
+                print(f"Marked {len(skipped_ids)} skipped jobs as skip=True in the database.")
         except Exception as e:
             error_logger_continue(f"Final queue persistence failed: {e}")
 
-    # Print detailed final queue
+    # Remove skipped jobs from the memory pool in-place to free memory
+    i = len(jobs) - 1
+    while i >= 0:
+        job = jobs[i]
+        if job.get('priority') == 'skip' or job.get('apply_recommendation') == 'skip':
+            jobs.pop(i)
+        i -= 1
+
+    # Filter final_queue returned list to only contain active non-skipped jobs
+    active_final_queue = [j for j in final_queue if j.get('priority') != 'skip' and j.get('apply_recommendation') != 'skip']
+
+    # Print detailed final queue (only for non-skipped jobs)
     print("\n" + "=" * 60)
     print("DETAILED FINAL APPLICATION QUEUE")
     print("=" * 60)
 
-    for i, job in enumerate(final_queue[:10], 1):
+    for i, job in enumerate(active_final_queue[:10], 1):
         features = job.get('features', {})
         metadata = job.get('metadata', {})
         cheap_result = job.get('cheap_llm_result', {})
@@ -1696,8 +2055,8 @@ async def pipeline_stage_final_queue(jobs: List[Dict], dp: Optional[DataPuller] 
         print(f"   Cheap LLM Fit: {cheap_result.get('fit_score', 0)}/100")
         print(f"   Strong LLM Score: {strong_result.get('final_score', 0)}/100")
 
-    print(f"\nStage 8 complete: {len(final_queue)} jobs in final queue.")
-    return final_queue
+    print(f"\nStage 8 complete: {len(active_final_queue)} active jobs in final queue.")
+    return active_final_queue
 
 
 def _row_to_job_dict(row) -> Dict:
@@ -1709,6 +2068,7 @@ def _row_to_job_dict(row) -> Dict:
             "id", "job_name", "company_name", "link", "job_summary", "extracted_summary",
             "skills", "responsibilities", "pay_range", "seniority", "work_type", "timezone",
             "source", "date_added", "city", "state", "location",
+            "flexibility",
             "title_embedding", "skills_embedding", "responsibilities_embedding", "description_embedding"
         ]
         d = {keys[i]: row[i] for i in range(min(len(keys), len(row)))}
@@ -1744,10 +2104,10 @@ def _row_to_job_dict(row) -> Dict:
             "title": d.get("job_name", ""),
             "description": d.get("job_summary", ""),  # Raw description is in job_summary in DB
             "summary": d.get("extracted_summary", ""), # Extracted summary is in description in DB
-            "pay": d.get("pay_range", ""),
-            "seniority": d.get("seniority", "NA"),
-            "work_type": d.get("work_type", "NA"),
-            "timezone": d.get("timezone", "NA"),
+            "pay": d.get("pay_range") if not is_missing_value(d.get("pay_range")) else "",
+            "seniority": d.get("seniority") if not is_missing_value(d.get("seniority")) else "NA",
+            "work_type": d.get("work_type") if not is_missing_value(d.get("work_type")) else (d.get("flexibility") if not is_missing_value(d.get("flexibility")) else "NA"),
+            "timezone": d.get("timezone") if not is_missing_value(d.get("timezone")) else "NA",
             "skills": skills,
             "requirements": responsibilities,
             "city": d.get("city"),
@@ -1883,13 +2243,27 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
     successful_ids = []
     log_entries = []
 
+    # ── Per-domain rate-limit tracking ──
+    # Tracks consecutive 429s per domain so we can back off more aggressively.
+    _domain_429_count: Dict[str, int] = {}
+    MAX_CONSECUTIVE_429 = 3      # threshold after which we apply extra backoff
+    EXTRA_BACKOFF_SECONDS = 30   # extra cooldown after hitting MAX_CONSECUTIVE_429 on a domain
+
     for job in jobs_without_desc:
         db_id = job["db_id"]
         url = job["url"]
         source = job.get("source", "")
         job_name = job.get("title", "")
         company_name = job.get("company", "")
-        
+
+        # Extract domain for rate-limit tracking
+        try:
+            parsed_domain = urlparse(url).netloc.lower()
+            if parsed_domain.startswith("www."):
+                parsed_domain = parsed_domain[4:]
+        except Exception:
+            parsed_domain = source.lower()
+
         if not url or not source:
             log_msg = f"Job ID {db_id} ({job_name} | {company_name}): Failed to scrape. Reason: Missing URL or source."
             print(log_msg)
@@ -1944,12 +2318,63 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
             payload["url"] = url
 
         api_method = "extract-js" if payload.get("js_config") is not None else "extract"
-        
+
+        # ── Attempt scrape with retry + exponential backoff on 429 ──
+        max_retries = 4
+        base_delay = 2.0
         description = ""
         scraper_response = None
-        try:
-            scraper_response = await dp.scrape_data(payload, api_method=api_method)
-            if scraper_response.get("status_code") == 200 and scraper_response.get("data"):
+        did_skip_due_to_rate_limit = False
+
+        for attempt in range(1, max_retries + 1):
+            # Domain-level cooldown: if this domain has been hammered with 429s,
+            # insert an extra forced delay before we even try.
+            domain_strikes = _domain_429_count.get(parsed_domain, 0)
+            if domain_strikes >= MAX_CONSECUTIVE_429:
+                extra_sleep = EXTRA_BACKOFF_SECONDS * (1 + random.random() * 0.5)
+                print(f"  [Rate Limit] Domain '{parsed_domain}' has {domain_strikes} consecutive 429s. "
+                      f"Cooling off for {extra_sleep:.0f}s before retry (attempt {attempt}/{max_retries})...")
+                await asyncio.sleep(extra_sleep)
+                # Reduce the counter so we don't loop forever on extra backoff;
+                # it will only re-trigger if we get another 429.
+                _domain_429_count[parsed_domain] = max(0, domain_strikes - 1)
+
+            try:
+                scraper_response = await dp.scrape_data(payload, api_method=api_method)
+            except Exception as e:
+                scraper_response = {"error": f"Exception raised during scrape: {e}"}
+
+            status = scraper_response.get("status_code")
+            if status == 429:
+                # Track the 429 per domain
+                _domain_429_count[parsed_domain] = _domain_429_count.get(parsed_domain, 0) + 1
+                domain_strikes = _domain_429_count[parsed_domain]
+
+                if attempt < max_retries:
+                    # Exponential backoff: 2s, 4s, 8s + jitter
+                    delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+                    print(f"  [429] Job ID {db_id}: Rate limited (domain={parsed_domain}, "
+                          f"strike={domain_strikes}). Retrying in {delay:.1f}s "
+                          f"(attempt {attempt+1}/{max_retries})...")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # All retries exhausted — mark as skip but log the 429
+                    log_msg = (f"Job ID {db_id} (URL: {url}): Failed to scrape after {max_retries} retries. "
+                               f"All attempts returned 429. Scraper response: {json.dumps(scraper_response)}")
+                    print(log_msg)
+                    log_entries.append(log_msg)
+                    try:
+                        dp.bulk_update_skip_status([db_id])
+                    except Exception as e:
+                        print(f"Warning: failed to update skip status for job {db_id}: {e}")
+                    did_skip_due_to_rate_limit = True
+                    break
+
+            elif status == 200 and scraper_response.get("data"):
+                # Success — reset 429 count for this domain
+                _domain_429_count[parsed_domain] = 0
+
                 data_result = scraper_response["data"]
                 if isinstance(data_result, list) and len(data_result) > 0:
                     desc_key = next(
@@ -1966,8 +2391,13 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
                         )
                     if desc_text and len(desc_text) > 50:
                         description = desc_text
-        except Exception as e:
-            scraper_response = {"error": f"Exception raised during scrape: {e}"}
+                break  # success — exit retry loop
+            else:
+                # Non-429 error (4xx, 5xx, etc.) — do not retry, just mark as skip
+                break
+
+        if did_skip_due_to_rate_limit:
+            continue
 
         if description:
             try:
@@ -1990,6 +2420,7 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
             except Exception as e:
                 print(f"Warning: failed to update skip status for job {db_id}: {e}")
 
+        # Base delay between jobs (0.5-1.5s) — only if we didn't already sleep for a 429 retry
         time.sleep(random.uniform(0.5, 1.5))
 
     try:
@@ -2007,6 +2438,7 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
         "j.id", "j.job_name", "c.company_name", "j.link", "j.job_summary", "j.description AS extracted_summary",
         "j.skills", "j.responsibilities", "j.pay_range", "j.seniority", "j.work_type", "j.timezone",
         "j.source", "j.date_added", "o.city", "o.state", "o.location",
+        "j.flexibility",
         "je.title_embedding", "je.skills_embedding", "je.responsibilities_embedding", "je.description_embedding"
     ]
     joins = [
@@ -2043,6 +2475,7 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
         "j.id", "j.job_name", "c.company_name", "j.link", "j.job_summary", "j.description AS extracted_summary",
         "j.skills", "j.responsibilities", "j.pay_range", "j.seniority", "j.work_type", "j.timezone",
         "j.source", "j.date_added", "o.city", "o.state", "o.location",
+        "j.flexibility",
         "je.title_embedding", "je.skills_embedding", "je.responsibilities_embedding", "je.description_embedding"
     ]
     
@@ -2054,6 +2487,12 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
     
     where_clauses = ["j.skip IS NOT TRUE"]
     
+    if not force_reprocess:
+        if stage < 8:
+            where_clauses.append("j.id NOT IN (SELECT job_id FROM strong_llm_results)")
+        if stage < 6:
+            where_clauses.append("j.id NOT IN (SELECT job_id FROM cheap_llm_results)")
+            
     if stage > 2:
         # For stages 3+, we need jobs that have completed Stage 2 (embeddings exist and are not NULL)
         where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
@@ -2112,7 +2551,7 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
     elif stage == 7:
         if "LEFT JOIN strong_llm_results slr ON j.id = slr.job_id" not in joins:
             joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
-        where_clauses.append("clr.decision IN ('yes', 'maybe')")
+        where_clauses.append("clr.decision IN ('apply', 'maybe')")
         where_clauses.append("slr.job_id IS NULL")
     elif stage == 8:
         where_clauses.append("slr.job_id IS NOT NULL")
@@ -2218,7 +2657,8 @@ async def main(scrape_pages: Optional[int] = None,
                stage_range: str = "0-8",
                db_limit: int = 50,
                skip_db: bool = False,
-               scrape_missing_24h: bool = False):
+               scrape_missing_24h: bool = False,
+               reprocess: bool = False):
     """
     Run selected pipeline stages.
 
@@ -2285,10 +2725,27 @@ async def main(scrape_pages: Optional[int] = None,
 
     # Stage 2: Embedding Generation + LLM Extraction
     if 2 <= stage_end and stage_start <= 2:
+        # Load any jobs from DB that are missing embeddings (but have descriptions) and merge them
+        if not skip_db:
+            print("Checking DB for any active jobs missing embeddings...")
+            db_jobs = await _load_jobs_for_stage(dp, stage=2, limit=db_limit, force_reprocess=False)
+            if db_jobs:
+                print(f"Found {len(db_jobs)} active jobs in DB missing embeddings. Merging them into the processing pool...")
+                merged = {}
+                for job in processed_job_pool:
+                    link = job.get("metadata", {}).get("link") or job.get("link") or ""
+                    if link:
+                        merged[link] = job
+                for job in db_jobs:
+                    link = job.get("metadata", {}).get("link") or job.get("link") or ""
+                    if link:
+                        if link not in merged:
+                            merged[link] = job
+                processed_job_pool = list(merged.values())
+
         if not processed_job_pool:
             print("[INFO] No scraped jobs available. Attempting to load from DB for Stage 2 (Embed+Extract)...")
-            # If the user specifically requested stage 2, we treat it as a re-process request
-            is_reprocess = (stage_start <= 2 and stage_end >= 2)
+            is_reprocess = reprocess
             processed_job_pool = await _load_jobs_for_stage(dp, stage=2, limit=db_limit, force_reprocess=is_reprocess)
             print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
 
@@ -2626,6 +3083,12 @@ if __name__ == "__main__":
         dest="scrape_missing_24h",
         help="At Step 1, ONLY try to scrape descriptions for jobs from the previous 24h that do not have them.",
     )
+    parser.add_argument(
+        "--reprocess",
+        action="store_true",
+        dest="reprocess",
+        help="Force Stage 2 to reprocess/embed jobs that already have embeddings.",
+    )
 
     args = parser.parse_args()
 
@@ -2670,4 +3133,5 @@ if __name__ == "__main__":
         db_limit=args.db_limit,
         skip_db=args.skip_db,
         scrape_missing_24h=args.scrape_missing_24h,
+        reprocess=args.reprocess,
     ))

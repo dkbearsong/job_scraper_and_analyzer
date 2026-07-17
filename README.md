@@ -592,32 +592,7 @@ To migrate from the legacy path to the adapter system, simply create `scrapers_c
 
 ## Running the Application
 
-### Option A: Terminal UI (Recommended)
-
-The TUI (Terminal User Interface) provides a visual dashboard for running and monitoring the pipeline:
-
-```bash
-python main.py --tui
-# or
-python main.py -t
-```
-
-**TUI Features:**
-- **Status bar** — Shows pipeline status (idle/running/complete/error), current stage, elapsed time, and total job count
-- **Sidebar** — Pipeline stage list with live status indicators (○ pending, ◉ running, ● complete, ⊗ error), job count breakdown per stage, and control buttons (Run / Stop / Reset)
-- **Tabbed content** — Pipeline overview with live logs, Jobs data table, Job detail panel, and Full logs
-- **Keyboard shortcuts:**
-  - `F5` — Run pipeline
-  - `F6` — Stop pipeline
-  - `F7` — Reset pipeline
-  - `Ctrl+P` — Focus Pipeline tab
-  - `Ctrl+J` — Focus Jobs tab
-  - `Ctrl+D` — Focus Detail tab
-  - `Ctrl+L` — Focus Logs tab
-  - `Ctrl+Q` / `Q` / `Escape` — Quit
-- **Click a job row** in the Jobs tab to see full details (skills, scores, LLM analysis, strengths/concerns)
-
-### Option B: Command Line (Headless)
+### Option A: Command Line (Headless)
 
 Run the full pipeline end-to-end with console output only:
 
@@ -626,6 +601,60 @@ python main.py
 ```
 
 This executes all 9 stages sequentially, printing progress summaries as it goes.
+
+### CLI Flags Reference
+
+All supported command-line flags for `python main.py`:
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--pages` | int | `None` | Max pages per URL for Stage 1 scraping (overrides the `max_pages` config in `scrapers_config.yaml`) |
+| `--visible` | flag | `False` | Show browser window during scraping (disables headless mode). By default browsers run headless. |
+| `--debug` | flag | `False` | Enable debug-level logging throughout the pipeline. |
+| `--log-file` | str | `None` | Path to a file where logs should be written. Relative paths are placed under `logs/`. |
+| `--skip-db` | flag | `False` | Skip all database persistence for every stage. Useful for development/demo runs when no PostgreSQL instance is available. |
+| `--verbose` | flag | `False` | Enable verbose output with detailed per-job debug information. |
+| `--skip-part-a` | flag | `False` | Skip Part A (company career-page scraping via `site_strategies/`) in the legacy fallback path. Only applies when no `scrapers_config.yaml` is found or when `run_fallback_after_adapters` is enabled. |
+| `-s, --stage` | str | `0-8` | Stage range to run. Accepts a single stage (`3`), a range (`2-5`), or `all`. See stage reference below. |
+| `-l, --limit` | int | `50` | Max records to pull from the database in any bulk-load operation when resuming from a partial run. |
+| `--scrape-missing-24h` | flag | `False` | At Stage 1, **only** re-scrape descriptions for jobs from the previous 24 hours that are missing them. Skips all other scraping. |
+| `--reprocess` | flag | `False` | Force Stage 2 to reprocess and re-embed jobs that already have embeddings (normally Stage 2 skips jobs with existing embeddings). |
+
+**Stage reference for `--stage` / `-s`:**
+
+| Stage | Name | Description |
+|-------|------|-------------|
+| 0 | Setup | Load `.env`, resume, profile; create AI engine |
+| 1 | Scrape | Scrape jobs via adapters or legacy fallback |
+| 2 | Embed + Extract | Embeddings + LLM extraction on job descriptions |
+| 3 | Rule Filter | Hard-constraint filtering (work type, pay, etc.) |
+| 4 | Archetype | Load archetypes and generate embeddings |
+| 5 | Vector Score | Semantic similarity scoring against archetypes |
+| 6 | Cheap LLM | Fast/cheap LLM classification |
+| 7 | Strong LLM | Deep LLM reranking |
+| 8 | Final Queue | Ranked application queue with recommendations |
+
+**Example usage:**
+
+```bash
+# Run the full pipeline
+python main.py
+
+# Run only stages 2 through 5 with verbose output
+python main.py -s 2-5 --verbose
+
+# Run Stage 3 (rule filter) only
+python main.py -s 3
+
+# Scrape with a visible browser, debug logging, and skip database
+python main.py --visible --debug --skip-db
+
+# Re-scrape only missing descriptions for the last 24 hours
+python main.py --scrape-missing-24h
+
+# Re-process embeddings for jobs that already have them
+python main.py -s 2 --reprocess
+```
 
 ### Database Persistence
 

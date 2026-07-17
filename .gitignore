@@ -19,3 +19,4 @@ output/
 job_page_strategy/
 site_strategies/
 tests/
+logs/

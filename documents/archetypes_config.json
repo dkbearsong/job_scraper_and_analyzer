@@ -2,14 +2,14 @@
     {
         "name": "Cloud Support Engineer",
         "title": "Senior Cloud Support Engineer",
-        "skills": "Python SQL NodeJS Javascript Typescript 'Cloud Platform' Communication Networking Troubleshooting Diagnostics Scripting Database",
-        "responsibilities": "Case Management and Incident Ownership. Technical Guidance and Support. Cross-Functional Collaboration. On-Call and Operational Coverage. Knowledge Management. AI-Assisted Troubleshooting. SLA and Process Adherence. Bug and Feature Reporting. Performance Analysis. Strategic Initiatives"
+        "skills": "Python SQL NodeJS Javascript Typescript 'Cloud Platform' Communication Networking Troubleshooting Diagnostics Scripting Database API AI",
+        "responsibilities": "Case Management and Incident Ownership. Technical Guidance and Support. Cross-Functional Collaboration. Troubleshoot and Resolve Complex Issues. Knowledge Management. AI-Assisted Troubleshooting. SLA and Process Adherence. Bug and Feature Reporting. Performance Analysis. Strategic Initiatives. Collaborate with Engineering/Product Teams. Automate Manual Tasks.  Monitor System Health. Scale Support Operations."
     },
     {
         "name": "AI Tooling Engineer",
         "title": "AI Tooling Engineer",
         "skills": "Python OpenAI LangChain Pinecone PyTorch LLMs",
-        "responsibilities": "Develop AI-powered tools. Integrate LLMs into workflows. Optimize inference pipelines."
+        "responsibilities": "Build and Deploy AI Solutions. Integrate LLMs into workflows. Architect Agentic Workflows. Cross-Functional Collaboration. Ownership of AI Observability & LLM Ops. Rapid Prototyping and Experimentation. Set Engineering Standards. Mentorship and Leadership. Context and Knowledge Engineering. Scale AI Infrastructure. Optimize inference pipelines."
     },
     {
         "name": "Automation Engineer",

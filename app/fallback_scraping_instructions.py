@@ -10,6 +10,7 @@ Part B: Scrape from job boards (Indeed, LinkedIn, ZipRecruiter, Google) via JobS
 This module is imported by main.py as a fallback path.
 """
 
+import asyncio
 import csv
 import itertools
 import json
@@ -17,16 +18,161 @@ import logging
 import os
 import random
 import re
-import time
+import time as time_module
 import glob
 from urllib.parse import urlparse
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 from datetime import datetime
 
 import pandas as pd
 from jobspy import scrape_jobs as _scrape_jobs
 
 from app.pull_data import DataPuller
+
+
+# ── Per-domain exponential backoff state ──
+# {domain: {"next_allowed": float, "current_delay": float, "retry_count": int, "success_streak": int}}
+_domain_backoff: Dict[str, Dict] = {}
+
+# Default backoff parameters
+_BACKOFF_MAX_RETRIES: int = 5
+_BACKOFF_BASE_DELAY: float = 1.0
+_BACKOFF_MAX_DELAY: float = 120.0
+_BACKOFF_FACTOR: float = 2.0
+_BACKOFF_SUCCESS_RESET: int = 3
+
+
+_db_lock = asyncio.Lock()
+
+
+async def _safe_db_call(fn: Callable, *args, **kwargs):
+    """
+    Execute a blocking psycopg2 database operation in a thread pool
+    while holding a global asyncio lock to prevent concurrent access
+    to the same psycopg2 connection.
+    """
+    async with _db_lock:
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+def _extract_domain(url: str) -> str:
+    """Extract the domain (hostname) from a URL for rate-limit tracking."""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except Exception:
+        return "unknown"
+
+
+_js_scrape_lock = asyncio.Lock()
+
+
+def _is_js_request(args, kwargs) -> bool:
+    api_method = kwargs.get("api_method", "")
+    if api_method == "extract-js":
+        return True
+    
+    # Check payload if present
+    if args and isinstance(args[0], dict):
+        payload = args[0]
+        if payload.get("js_config") is not None:
+            return True
+        if payload.get("pagination", {}).get("use_js") is True:
+            return True
+            
+    return False
+
+
+async def _request_with_domain_backoff(
+    request_fn: Callable,
+    *args,
+    url: str = "",
+    max_retries: int = _BACKOFF_MAX_RETRIES,
+    base_delay: float = _BACKOFF_BASE_DELAY,
+    max_delay: float = _BACKOFF_MAX_DELAY,
+    backoff_factor: float = _BACKOFF_FACTOR,
+    success_reset_threshold: int = _BACKOFF_SUCCESS_RESET,
+    **kwargs
+) -> dict:
+    """
+    Make an async request with per-domain exponential backoff that persists
+    across all subsequent requests to the same domain.
+
+    Before making the request, checks if the domain is in a cooldown period
+    and waits if needed.  On a 429 response, retries with exponential backoff
+    and updates the domain's cooldown state so that *all* subsequent requests
+    to the same domain will wait.
+
+    Args:
+        request_fn: Async callable that returns a dict with a 'status_code' key.
+        url: The URL being requested (used to extract the domain).
+        max_retries: Max retry attempts per request.
+        base_delay: Initial backoff delay in seconds.
+        max_delay: Maximum backoff delay in seconds.
+        backoff_factor: Multiplier for delay after each 429.
+        success_reset_threshold: Number of consecutive successes before
+                                 resetting the domain's backoff state.
+        *args, **kwargs: Passed through to request_fn.
+
+    Returns:
+        Response dict from request_fn (may still be a 429 if retries exhausted).
+    """
+    domain = _extract_domain(url)
+    state = _domain_backoff.setdefault(domain, {
+        "next_allowed": 0.0,
+        "current_delay": base_delay,
+        "retry_count": 0,
+        "success_streak": 0,
+    })
+
+    # ── Pre-request cooldown check ──
+    now = time_module.time()
+    if now < state["next_allowed"]:
+        wait = state["next_allowed"] - now
+        print(f"  [Rate Limit] Domain '{domain}' in cooldown. Waiting {wait:.1f}s...")
+        await asyncio.sleep(wait)
+
+    for attempt in range(max_retries + 1):
+        if _is_js_request(args, kwargs):
+            async with _js_scrape_lock:
+                result = await request_fn(*args, **kwargs)
+        else:
+            result = await request_fn(*args, **kwargs)
+        status = int(result.get("status_code", 200))
+
+        if status == 429:
+            state["retry_count"] += 1
+            state["success_streak"] = 0
+
+            # Use Retry-After header if present, else exponential backoff
+            retry_after = result.get("retry_after") or result.get("headers", {}).get("Retry-After")
+            if retry_after:
+                delay = float(retry_after)
+            else:
+                delay = min(state["current_delay"] * (backoff_factor ** attempt), max_delay)
+
+            state["current_delay"] = min(delay * backoff_factor, max_delay)
+            state["next_allowed"] = time_module.time() + delay
+
+            if attempt < max_retries:
+                print(f"  [Rate Limit] 429 on '{domain}' (attempt {attempt + 1}/{max_retries}). "
+                      f"Backing off {delay:.1f}s...")
+                await asyncio.sleep(delay)
+            else:
+                print(f"  [Rate Limit] 429 on '{domain}' — exhausted {max_retries} retries. "
+                      f"Giving up on this request.")
+        else:
+            # Success — gradually reduce backoff
+            state["success_streak"] += 1
+            if state["success_streak"] >= success_reset_threshold:
+                state["current_delay"] = base_delay
+                state["retry_count"] = 0
+            return result
+
+    return result  # Return the last 429 response after exhausting retries
 
 
 def error_logger_continue(error_msg: str) -> None:
@@ -123,8 +269,13 @@ async def scrape_sites(
     Returns:
         List of scraped job dicts, or None on failure.
     """
-    new_data = await dp.scrape_data(
-        i["strategy"], api_method=i["api_method"]
+    # Wrap with per-domain exponential backoff for 429 handling
+    strategy_url = i["strategy"].get("url", company_url)
+    new_data = await _request_with_domain_backoff(
+        dp.scrape_data,
+        i["strategy"],
+        url=strategy_url,
+        api_method=i["api_method"],
     )
     new_data["source"] = i["strategy"]["source"]
     if new_data["status_code"] != 200:
@@ -175,7 +326,7 @@ async def scrape_sites(
 
 
 async def scrape_job_descriptions(
-    jobs: list, dp: DataPuller, verbose: bool = False
+    jobs: list, dp: DataPuller, verbose: bool = False, concurrency: int = 5
 ) -> list:
     """
     Scrape individual job pages to extract descriptions for each job.
@@ -189,10 +340,13 @@ async def scrape_job_descriptions(
         jobs: List of job dicts with 'url' keys.
         dp: DataPuller instance for microservice calls.
         verbose: If True, print detailed debug output.
+        concurrency: Concurrency limit for scraping.
 
     Returns:
         The same list of job dicts with 'description' fields populated.
     """
+    from collections import defaultdict
+
     # Common CSS selectors for job descriptions across popular ATS platforms
     # Ordered from most specific/common to most generic
     description_selectors = [
@@ -214,54 +368,81 @@ async def scrape_job_descriptions(
         "[role='main']",                         # Fallback to ARIA main
     ]
 
+    concurrency_limit = int(os.getenv("SCRAPER_CONCURRENCY", concurrency))
+    global_semaphore = asyncio.Semaphore(concurrency_limit)
+
     jobs_with_descriptions = 0
     skipped_jobs = []
+
+    skipped_jobs_lock = asyncio.Lock()
+    counter_lock = asyncio.Lock()
+
+    # Pre-filter jobs that have no URL
+    jobs_with_url = []
     for idx, job in enumerate(jobs):
         job_url = job.get("url")
         if not job_url:
             if verbose:
                 print(f"  Job {idx + 1}/{len(jobs)}: No URL, skipping description scrape.")
-            log_entry = {
+            skipped_jobs.append({
                 "id": job.get("id"),
                 "job_name": job.get("title") or "",
                 "company_name": job.get("company") or "",
                 "source": job.get("source") or "",
                 "date": datetime.now().isoformat(),
-            }
-            skipped_jobs.append(log_entry)
-            continue
+            })
+        else:
+            jobs_with_url.append(job)
 
+    # Group jobs by domain
+    domain_to_jobs = defaultdict(list)
+    for job in jobs_with_url:
+        domain = _extract_domain(job["url"])
+        domain_to_jobs[domain].append(job)
+
+    async def scrape_single_job(job: dict, idx: int, total: int):
+        nonlocal jobs_with_descriptions
+        job_url = job["url"]
         if verbose:
-            print(f"  Scraping description for job {idx + 1}/{len(jobs)}: {job.get('title', 'Unknown')}")
+            print(f"  Scraping description for job {idx + 1}/{total}: {job.get('title', 'Unknown')}")
+
+        # Construct selectors payload to fetch ALL selectors in a single request
+        selectors_dict = {f"desc_{i}": selector for i, selector in enumerate(description_selectors)}
+        payload = {
+            "url": job_url,
+            "strategy": "selector",
+            "selectors": selectors_dict
+        }
 
         description = ""
-        for selector in description_selectors:
-            payload = {
-                "url": job_url,
-                "strategy": "selector",
-                "selectors": {
-                    "description": selector
-                }
-            }
+        async with global_semaphore:
             try:
-                result = await dp.scrape_data(payload, api_method="extract")
+                result = await _request_with_domain_backoff(
+                    dp.scrape_data,
+                    payload,
+                    url=job_url,
+                    api_method="extract",
+                )
                 if result.get("status_code") == 200 and result.get("data"):
-                    data = result["data"]
-                    if isinstance(data, list) and len(data) > 0:
-                        desc_text = data[0].get("description", "")
-                        if desc_text and len(desc_text) > 50:
-                            description = desc_text
-                            if verbose:
-                                print(f"    Found description with selector: '{selector}' ({len(desc_text)} chars)")
-                            break
+                    data_list = result["data"]
+                    if isinstance(data_list, list) and len(data_list) > 0:
+                        first_item = data_list[0]
+                        # Find the first matching selector description text > 50 chars
+                        for i, selector in enumerate(description_selectors):
+                            desc_text = first_item.get(f"desc_{i}", "")
+                            if desc_text and len(desc_text) > 50:
+                                description = desc_text
+                                if verbose:
+                                    print(f"    Found description with selector: '{selector}' ({len(desc_text)} chars)")
+                                break
             except Exception as e:
                 if verbose:
-                    print(f"    Selector '{selector}' failed: {e}")
-                continue
+                    print(f"    Request failed for {job_url}: {e}")
 
         if description:
             job["description"] = description
-            jobs_with_descriptions += 1
+            async with counter_lock:
+                jobs_with_descriptions += 1
         else:
             if verbose:
                 print(f"    No description found for {job_url}")
@@ -272,11 +453,21 @@ async def scrape_job_descriptions(
                 "source": job.get("source") or "",
                 "date": datetime.now().isoformat(),
             }
-            skipped_jobs.append(log_entry)
+            async with skipped_jobs_lock:
+                skipped_jobs.append(log_entry)
 
-        # Small delay between requests to avoid overwhelming the microservice
-        time.sleep(random.uniform(0.5, 1.5))
+    async def process_domain_jobs(domain: str, jobs_list: list):
+        for idx, job in enumerate(jobs_list):
+            await scrape_single_job(job, idx, len(jobs_list))
+            # Polite delay between requests to the same domain (async-friendly)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
 
+    # Process all domains concurrently
+    if domain_to_jobs:
+        tasks = [process_domain_jobs(domain, jobs_list) for domain, jobs_list in domain_to_jobs.items()]
+        await asyncio.gather(*tasks)
+
+    # Log skipped jobs if any
     if skipped_jobs:
         log_filename = f"skipped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         log_filepath = os.path.join("logs", "skipped", log_filename)
@@ -330,7 +521,7 @@ def scrape_jb(
 
 
 async def scrape_job_descriptions_from_db(
-    data: list, dp: DataPuller, verbose: bool = False
+    data: list, dp: DataPuller, verbose: bool = False, concurrency: int = 5
 ) -> list:
     """
     Query the database for jobs missing descriptions (job_summary IS NULL),
@@ -342,15 +533,17 @@ async def scrape_job_descriptions_from_db(
         data: The in-memory list of scraped job dicts (to enrich with descriptions).
         dp: DataPuller instance for database queries and microservice calls.
         verbose: If True, print detailed debug output.
+        concurrency: Concurrency limit for scraping.
 
     Returns:
         The enriched data list with descriptions populated where possible.
     """
-    data = await _scrape_job_descriptions_from_db_impl(data, dp, verbose)
+    data = await _scrape_job_descriptions_from_db_impl(data, dp, verbose, concurrency)
     return data
 
 
-async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verbose: bool = False) -> list:
+async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verbose: bool = False, concurrency: int = 5) -> list:
+    from collections import defaultdict
     query = """
         SELECT j.id, j.link, j.source, j.job_name, c.company_name, j.date_added
         FROM job j
@@ -358,7 +551,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         WHERE j.job_summary IS NULL AND (j.skip IS NULL OR j.skip = FALSE)
     """
     try:
-        rows = dp.pull_data_db(query)
+        rows = await _safe_db_call(dp.pull_data_db, query)
     except Exception as e:
         print(f"Error querying DB for jobs without descriptions: {e}")
         return data
@@ -417,11 +610,34 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                     return filepath
         return None
 
+    concurrency_limit = int(os.getenv("SCRAPER_CONCURRENCY", concurrency))
+    global_semaphore = asyncio.Semaphore(concurrency_limit)
+
     updated_count = 0
     skipped_jobs = []
     job_ids_to_skip = []
+    enriched_descriptions = {} # url -> description
 
+    skipped_jobs_lock = asyncio.Lock()
+    job_ids_to_skip_lock = asyncio.Lock()
+    updated_count_lock = asyncio.Lock()
+    enriched_descriptions_lock = asyncio.Lock()
+
+    # Group jobs by domain
+    domain_to_jobs = defaultdict(list)
     for job in jobs_without_desc:
+        url = job["url"]
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+        except Exception:
+            domain = job.get("source", "").lower() or "unknown"
+        domain_to_jobs[domain].append(job)
+
+    async def scrape_single_db_job(job: dict):
+        nonlocal updated_count
         db_id = job["db_id"]
         url = job["url"]
         source = job.get("source", "")
@@ -429,35 +645,22 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         company_name = job.get("company", "")
         job_date = job.get("date")
 
-        if not url:
+        if not url or not source:
             if verbose:
-                print(f"  DB job {db_id}: No URL, skipping.")
+                print(f"  DB job {db_id}: Missing URL or source, skipping.")
             log_entry = {
                 "id": db_id,
                 "job_name": job_name,
                 "company_name": company_name,
                 "source": source,
                 "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                "url": url,
             }
-            skipped_jobs.append(log_entry)
-            job_ids_to_skip.append(db_id)
-            data = [item for item in data if item.get("url") != url and item.get("link") != url]
-            continue
-
-        if not source:
-            if verbose:
-                print(f"  DB job {db_id}: No source, skipping.")
-            log_entry = {
-                "id": db_id,
-                "job_name": job_name,
-                "company_name": company_name,
-                "source": source,
-                "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
-            }
-            skipped_jobs.append(log_entry)
-            job_ids_to_skip.append(db_id)
-            data = [item for item in data if item.get("url") != url and item.get("link") != url]
-            continue
+            async with skipped_jobs_lock:
+                skipped_jobs.append(log_entry)
+            async with job_ids_to_skip_lock:
+                job_ids_to_skip.append(db_id)
+            return
 
         # Look up strategy file matching the source
         strategy_path = find_strategy_file(source)
@@ -485,11 +688,13 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                     "company_name": company_name,
                     "source": source,
                     "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                    "url": url,
                 }
-                skipped_jobs.append(log_entry)
-                job_ids_to_skip.append(db_id)
-                data = [item for item in data if item.get("url") != url and item.get("link") != url]
-                continue
+                async with skipped_jobs_lock:
+                    skipped_jobs.append(log_entry)
+                async with job_ids_to_skip_lock:
+                    job_ids_to_skip.append(db_id)
+                return
 
         try:
             with open(strategy_path, "r") as f:
@@ -502,21 +707,21 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                 "company_name": company_name,
                 "source": source,
                 "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                "url": url,
             }
-            skipped_jobs.append(log_entry)
-            job_ids_to_skip.append(db_id)
-            data = [item for item in data if item.get("url") != url and item.get("link") != url]
-            continue
+            async with skipped_jobs_lock:
+                skipped_jobs.append(log_entry)
+            async with job_ids_to_skip_lock:
+                job_ids_to_skip.append(db_id)
+            return
 
         if verbose:
             print(f"  Scraping description for DB job {db_id} ({source}) via {strategy_path}")
 
         # Prepare the payload using the DB record's URL
         payload = dict(strategy)
-    
         if payload.get("url") == "{url}":
             payload["url"] = url
-        print(f"JD payload URL: {payload['url']}")
 
         api_method = (
             "extract-js"
@@ -525,44 +730,48 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         )
 
         description = ""
-        try:
-            result = await dp.scrape_data(payload, api_method=api_method)
-            if result.get("status_code") == 200 and result.get("data"):
-                data_result = result["data"]
-                if isinstance(data_result, list) and len(data_result) > 0:
-                    # Strategy may use 'description', 'summary', or custom selector fields
-                    desc_key = next(
-                        (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
-                         if data_result[0].get(k)),
-                        None
-                    )
-                    if desc_key:
-                        desc_text = data_result[0].get(desc_key, "")
-                    else:
-                        # If no known key, take the first non-empty string value
-                        desc_text = next(
-                            (v for v in data_result[0].values()
-                             if isinstance(v, str) and len(v) > 50),
-                            ""
+        async with global_semaphore:
+            try:
+                result = await _request_with_domain_backoff(
+                    dp.scrape_data,
+                    payload,
+                    url=url,
+                    api_method=api_method,
+                )
+                if result.get("status_code") == 200 and result.get("data"):
+                    data_result = result["data"]
+                    if isinstance(data_result, list) and len(data_result) > 0:
+                        desc_key = next(
+                            (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
+                             if data_result[0].get(k)),
+                            None
                         )
-                    if desc_text and len(desc_text) > 50:
-                        description = desc_text
-        except Exception as e:
-            print(f"  Error scraping description for DB job {db_id}: {e}")
+                        if desc_key:
+                            desc_text = data_result[0].get(desc_key, "")
+                        else:
+                            # If no known key, take the first non-empty string value
+                            desc_text = next(
+                                (v for v in data_result[0].values()
+                                 if isinstance(v, str) and len(v) > 50),
+                                ""
+                            )
+                        if desc_text and len(desc_text) > 50:
+                            description = desc_text
+            except Exception as e:
+                print(f"  Error scraping description for DB job {db_id}: {e}")
 
         if description:
             try:
-                dp.conn.update("job", {"job_summary": description}, {"id": db_id}, dbname=dp.dbname)
-                updated_count += 1
+                await _safe_db_call(dp.conn.update, "job", {"job_summary": description}, {"id": db_id}, dbname=dp.dbname)
+                async with updated_count_lock:
+                    updated_count += 1
                 if verbose:
                     print(f"    Updated DB job {db_id} with description ({len(description)} chars)")
             except Exception as e:
                 print(f"    Failed to update DB record for job {db_id}: {e}")
 
-            # Enrich the in-memory data list: match by URL
-            for item in data:
-                if item.get("url") == url:
-                    item["description"] = description
+            async with enriched_descriptions_lock:
+                enriched_descriptions[url] = description
         else:
             if verbose:
                 print(f"    No description found for DB job {db_id} ({url})")
@@ -572,17 +781,38 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                 "company_name": company_name,
                 "source": source,
                 "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                "url": url,
             }
-            skipped_jobs.append(log_entry)
-            job_ids_to_skip.append(db_id)
-            data = [item for item in data if item.get("url") != url and item.get("link") != url]
+            async with skipped_jobs_lock:
+                skipped_jobs.append(log_entry)
+            async with job_ids_to_skip_lock:
+                job_ids_to_skip.append(db_id)
 
-        # Small delay between requests
-        time.sleep(random.uniform(0.5, 1.5))
+    async def process_domain_db_jobs(domain: str, jobs_list: list):
+        for job in jobs_list:
+            await scrape_single_db_job(job)
+            # Polite delay between requests to the same domain (async-friendly)
+            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+    # Process all domains concurrently
+    if domain_to_jobs:
+        tasks = [process_domain_db_jobs(domain, jobs_list) for domain, jobs_list in domain_to_jobs.items()]
+        await asyncio.gather(*tasks)
+
+    # Post-process in-memory data: Enrich descriptions
+    for item in data:
+        item_url = item.get("url") or item.get("link")
+        if item_url in enriched_descriptions:
+            item["description"] = enriched_descriptions[item_url]
+    
+    # Filter out skipped jobs from the list
+    skipped_urls = {item.get("url") or item.get("link") for item in skipped_jobs if item.get("url") or item.get("link")}
+    if skipped_urls:
+        data = [item for item in data if item.get("url") not in skipped_urls and item.get("link") not in skipped_urls]
 
     if job_ids_to_skip:
         try:
-            dp.bulk_update_skip_status(job_ids_to_skip)
+            await _safe_db_call(dp.bulk_update_skip_status, job_ids_to_skip)
             print(f"Set skip=True for {len(job_ids_to_skip)} job(s) in the database.")
         except Exception as e:
             print(f"Warning: failed to update skip status for jobs: {e}")
@@ -629,7 +859,7 @@ async def _load_jobs_without_embeddings(dp: DataPuller, limit: int = 50) -> list
         LIMIT %s
     """
     try:
-        rows = dp.conn.execute_sql(query, (limit,), fetch=True)
+        rows = await _safe_db_call(dp.conn.execute_sql, query, (limit,), fetch=True)
     except Exception as e:
         print(f"Error querying DB for jobs without embeddings: {e}")
         return []
@@ -700,7 +930,7 @@ async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> l
     job_ids_to_skip = []
 
     lookup_query = """
-        SELECT j.id, j.job_name, c.company_name, j.source, j.date_added
+        SELECT j.id, j.job_name, c.company_name, j.source, j.date_added, j.job_summary
         FROM job j
         JOIN company c ON j.company_id = c.id
         WHERE j.link = %s
@@ -715,23 +945,34 @@ async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> l
 
         db_id = None
         job_date = None
+        has_existing_desc = False
         try:
-            rows = dp.conn.execute_sql(lookup_query, (link,), fetch=True)
+            rows = await _safe_db_call(dp.conn.execute_sql, lookup_query, (link,), fetch=True)
             if rows:
                 row = rows[0]
-                db_id = row.get("id") if isinstance(row, dict) else row[0]
+                db_id = row.get("id") if (isinstance(row, dict) or hasattr(row, 'get')) else row[0]
+                
+                # Check if job already has a description in the DB to avoid re-scraping skip override
+                existing_desc = row.get("job_summary") if (isinstance(row, dict) or hasattr(row, 'get')) else (row[5] if len(row) > 5 else None)
+                if existing_desc and len(existing_desc.strip()) > 50:
+                    has_existing_desc = True
+
                 if not company_name:
-                    company_name = row.get("company_name") if isinstance(row, dict) else row[2]
+                    company_name = row.get("company_name") if (isinstance(row, dict) or hasattr(row, 'get')) else row[2]
                 if not job_name:
-                    job_name = row.get("job_name") if isinstance(row, dict) else row[1]
+                    job_name = row.get("job_name") if (isinstance(row, dict) or hasattr(row, 'get')) else row[1]
                 if not source:
-                    source = row.get("source") if isinstance(row, dict) else row[3]
-                if isinstance(row, dict):
+                    source = row.get("source") if (isinstance(row, dict) or hasattr(row, 'get')) else row[3]
+                if isinstance(row, dict) or hasattr(row, 'get'):
                     job_date = row.get("date_added")
                 elif len(row) > 4:
                     job_date = row[4]
         except Exception as e:
             print(f"Warning: failed to look up job in DB for link '{link}': {e}")
+
+        if has_existing_desc:
+            # Avoid marking existing jobs with valid descriptions as skipped
+            continue
 
         log_entry = {
             "id": db_id,
@@ -747,7 +988,7 @@ async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> l
 
     if job_ids_to_skip:
         try:
-            dp.bulk_update_skip_status(job_ids_to_skip)
+            await _safe_db_call(dp.bulk_update_skip_status, job_ids_to_skip)
             print(f"Set skip=True for {len(job_ids_to_skip)} job(s) in the database.")
         except Exception as e:
             print(f"Warning: failed to update skip status for jobs: {e}")
@@ -772,6 +1013,7 @@ async def _pipeline_stage_scrape_legacy(
     dp: DataPuller, user_preferences: dict, sites: dict, skip_db: bool, verbose: bool,
     enable_part_b: bool = False, skip_part_a: bool = False,
     db_limit: int = 50,
+    reason: Optional[str] = None,
 ) -> List[Dict]:
     """
     Legacy (fallback) scraping path: hardcoded Part A + optional Part B.
@@ -793,11 +1035,19 @@ async def _pipeline_stage_scrape_legacy(
         enable_part_b: If True, run Part B (job board scraping via JobSpy).
         skip_part_a: If True, skip the company career-page scraping (site_strategies/)
                      and jump straight to the description scraping step.
+        reason: Optional string describing why the legacy path is being run.
 
     Returns:
         Combined list of raw scraped job dicts from both parts.
     """
-    print("Using legacy scraping path (no scrapers_config.yaml found).")
+    if reason:
+        print(f"Using legacy scraping path ({reason}).")
+    else:
+        scrapers_config_path = os.getenv("SCRAPERS_CONFIG", "scrapers_config.yaml")
+        if os.path.exists(scrapers_config_path):
+            print("Using legacy scraping path (triggered via configuration).")
+        else:
+            print(f"Using legacy scraping path (no {scrapers_config_path} found).")
 
     # ==========================================
     # PART A: Scrape from company career pages
@@ -837,50 +1087,65 @@ async def _pipeline_stage_scrape_legacy(
             site_strategies.append(strategy)
         print(f"Loaded {len(site_strategies)} site strategies.")
 
-        for i in site_strategies:
-            company_url = i["strategy"].pop("company_url", None)
-            print(f"Scraping {i['company']}...")
-            if isinstance(i["strategy"]["url"], str):
-                d = await scrape_sites(i, company_url, dp)
-                if not d:
-                    continue
-                if isinstance(d, list):
-                    data += d
-                else:
-                    data.append(d)
-            elif isinstance(i["strategy"]["url"], list):
-                for j in i["strategy"]["url"]:
-                    new_payload = i
-                    new_payload["strategy"]["url"] = j
-                    d = await scrape_sites(new_payload, company_url, dp)
-                    if not d:
-                        continue
+        concurrency = user_preferences.get("scraper_concurrency", 5)
+        global_semaphore = asyncio.Semaphore(int(os.getenv("SCRAPER_CONCURRENCY", concurrency)))
+
+        async def scrape_strategy(strat_item):
+            company_url = strat_item["strategy"].pop("company_url", None)
+            print(f"Scraping {strat_item['company']}...")
+            results_local = []
+            urls = strat_item["strategy"]["url"]
+            
+            # If strategy url is a list, process them sequentially for this company to avoid hitting them too fast
+            if isinstance(urls, list):
+                for url_val in urls:
+                    new_payload = dict(strat_item)
+                    new_payload["strategy"] = dict(strat_item["strategy"])
+                    new_payload["strategy"]["url"] = url_val
+                    async with global_semaphore:
+                        d = await scrape_sites(new_payload, company_url, dp)
+                    if d:
+                        if isinstance(d, list):
+                            results_local.extend(d)
+                        else:
+                            results_local.append(d)
+            else:
+                async with global_semaphore:
+                    d = await scrape_sites(strat_item, company_url, dp)
+                if d:
                     if isinstance(d, list):
-                        data += d
+                        results_local.extend(d)
                     else:
-                        data.append(d)
+                        results_local.append(d)
+            return results_local
+
+        tasks = [scrape_strategy(strat) for strat in site_strategies]
+        scraped_lists = await asyncio.gather(*tasks)
+        for sublist in scraped_lists:
+            data.extend(sublist)
 
         print(f"Total jobs scraped from company boards: {len(data)}")
 
         # ── Load jobs into the database first (before scraping descriptions) ──
         if data and not skip_db:
             print("--- Loading Jobs into Database ---")
-            dp.load_scraped_data_to_db(data)
+            await _safe_db_call(dp.load_scraped_data_to_db, data)
         elif not skip_db:
             print("No company board jobs to load into DB.")
     else:
         print("--- Skipping Part A (company career-page scraping) ---")
 
     # ── Then scrape descriptions from DB for jobs that are missing them ──
+    concurrency = user_preferences.get("scraper_concurrency", 5)
     if not skip_db:
         print("--- Scraping Missing Job Descriptions from DB (via job_page_strategy/) ---")
-        data = await scrape_job_descriptions_from_db(data, dp, verbose=verbose)
+        data = await scrape_job_descriptions_from_db(data, dp, verbose=verbose, concurrency=concurrency)
     else:
         print("--- Skipping DB description scraping (skip_db=True) ---")
         # Fall back to the old in-memory description scraping if no DB
         if data:
             print("--- Scraping Job Descriptions (in-memory fallback) ---")
-            data = await scrape_job_descriptions(data, dp, verbose=verbose)
+            data = await scrape_job_descriptions(data, dp, verbose=verbose, concurrency=concurrency)
         else:
             print("No company board jobs to scrape descriptions for.")
 
@@ -969,12 +1234,12 @@ async def _pipeline_stage_scrape_legacy(
                     f"Job board scrape failed for {board}/{st}/{location}: {e}"
                 )
 
-            time.sleep(random.uniform(delay["min"], delay["max"]))
+            time_module.sleep(random.uniform(delay["min"], delay["max"]))
 
         print(f"Total jobs scraped from job boards: {len(jobs)}")
 
         if not skip_db:
-            dp.load_scraped_data_to_db(jobs)
+            await _safe_db_call(dp.load_scraped_data_to_db, jobs)
     else:
         print("--- Job Board Scraping (Part B disabled — skipping) ---")
 

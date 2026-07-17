@@ -3,6 +3,8 @@
 from abc import ABC, abstractmethod
 import os
 import json
+import time
+import requests
 # Import real libraries
 from openai import OpenAI
 from anthropic import Anthropic
@@ -46,47 +48,51 @@ Return ONLY a valid JSON object with the following keys:
 - "skills": A flat list of specific technical skills, tools, and hard competencies mentioned.
 - "requirements": A list of key responsibilities or qualitative requirements (e.g., "leadership", "customer-facing").
 - "summary": A concise, professional summary of the role (2-3 sentences) that captures the essence of the position.
+- "pay_range": The salary or pay range mentioned in the job description (e.g., "$100,000 - $120,000", "$50/hr"). If no pay range is mentioned, return "Not Specified".
+- "work_type": The work arrangement/flexibility. Must be exactly one of: "Remote", "Hybrid", "Onsite", or "Unknown".
+- "seniority": The seniority level of the role. Must be exactly one of: "Junior", "Mid-Level", "Senior", "Lead", "Management", "C-Suite", or "Unknown".
 
 Do not include any conversational text, markdown formatting (like ```json), or explanations.
 """
 
 class OpenAIProvider(BaseAIProvider):
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
         self._provider_name = "openai"
-
+        self.extraction_model = extraction_model or "gpt-4o"
+        self.embeddings_model = embeddings_model or "text-embedding-3-small"
 
     def extract_structured_data(self, text: str) -> dict:
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o", # or gpt-3.5-turbo
+                model=self.extraction_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
                 ],
-                response_format={"type": "json_object"} # Ensures valid JSON
+                response_format={"type": "json_object"}
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model="gpt-4o",
+                provider=self._provider_name, model=self.extraction_model,
                 operation="extraction", response=response,
                 context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.choices[0].message.content
             if content is None:
-                return {"skills": [], "summary": ""}
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
             return json.loads(content)
         except Exception as e:
             print(f"[OpenAI Error] {e}")
-            return {"skills": [], "summary": ""}
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
     def generate_embedding(self, text: str) -> list:
         try:
             response = self.client.embeddings.create(
                 input=text,
-                model="text-embedding-3-small"
+                model=self.embeddings_model
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model="text-embedding-3-small",
+                provider=self._provider_name, model=self.embeddings_model,
                 operation="embedding", response=response,
                 context=f"generate_embedding ({len(text)} chars)"
             )
@@ -96,26 +102,25 @@ class OpenAIProvider(BaseAIProvider):
             return []
 
 class ClaudeProvider(BaseAIProvider):
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
         self.client = Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
         self._provider_name = "claude"
-        self._model = "claude-3-5-sonnet-20240620"
-
+        self.extraction_model = extraction_model or "claude-3-5-sonnet-20240620"
+        self.embeddings_model = embeddings_model or ""
 
     def extract_structured_data(self, text: str) -> dict:
         try:
             message = self.client.messages.create(
-                model=self._model,
+                model=self.extraction_model,
                 max_tokens=1000,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": text}]
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=self._model,
+                provider=self._provider_name, model=self.extraction_model,
                 operation="extraction", response=message,
                 context=f"extract_structured_data ({len(text)} chars)"
             )
-            # Claude may return content as a list of block objects, so extract text safely.
             content = None
             if hasattr(message, "content") and message.content:
                 first_block = message.content[0]
@@ -135,54 +140,51 @@ class ClaudeProvider(BaseAIProvider):
                         for block in content
                     )
             if content is None:
-                return {"skills": [], "summary": ""}
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
             return json.loads(content)
         except Exception as e:
             print(f"[Claude Error] {e}")
-            return {"skills": [], "summary": ""}
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
     def generate_embedding(self, text: str) -> list:
-        # Note: Anthropic does not have a direct embedding endpoint like OpenAI.
-        # Usually, you'd use an OpenAI model or a local model for embeddings 
-        # even if using Claude for extraction. For now, we'll return empty or handle via AIEngine logic.
         print("[Claude] Embedding not natively supported via Anthropic API. Use another provider.")
         return []
 
 class GeminiProvider(BaseAIProvider):
-    def __init__(self, api_key=None):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=self.api_key)
         self._provider_name = "gemini"
-        self.model_name = 'gemini-2.0-flash-exp'
+        self.extraction_model = extraction_model or 'gemini-3.5-flash'
+        self.embeddings_model = embeddings_model or 'gemini-embedding-2'
 
-    def extract_structured_data(self, text: str, temp: float) -> dict:
+    def extract_structured_data(self, text: str, temp: float = 0.1) -> dict:
         try:
-            # We instruct Gemini to return JSON
             response = self.client.models.generate_content(
-                model=self.model_name,
+                model=self.extraction_model,
                 contents=f"{SYSTEM_PROMPT}\n\nText: {text}",
                 config=types.GenerateContentConfig(
-                    temperature=0.1
+                    temperature=temp
                 )
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=self.model_name,
+                provider=self._provider_name, model=self.extraction_model,
                 operation="extraction", response=response,
                 context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.text
             if content is None:
-                return {"skills": [], "summary": ""}
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
             return json.loads(content)
         except Exception as e:
             print(f"[Gemini Error] {e}")
-            return {"skills": [], "summary": ""}
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
     def generate_embedding(self, text: str) -> list:
         try:
-            result = self.client.models.embed_content(model="text-embedding-004", contents=text)
+            result = self.client.models.embed_content(model=self.embeddings_model, contents=text)
             usage_tracker.record(
-                provider=self._provider_name, model="text-embedding-004",
+                provider=self._provider_name, model=self.embeddings_model,
                 operation="embedding",
                 context=f"generate_embedding ({len(text)} chars)"
             )
@@ -193,22 +195,19 @@ class GeminiProvider(BaseAIProvider):
             return []
 
 class OpenRouterProvider(BaseAIProvider):
-    """Acts as a proxy to various models via OpenRouter."""
-    def __init__(self, api_key=None):
-        # OpenRouter is OpenAI-compatible
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
         self.client = OpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=api_key or os.getenv("OPENROUTER_API_KEY")
         )
         self._provider_name = "openrouter"
-        self._extraction_model = "anthropic/claude-3.5-sonnet"
-        self._embedding_model = "openai/text-embedding-3-small"
-
+        self.extraction_model = extraction_model or "anthropic/claude-3.5-sonnet"
+        self.embeddings_model = embeddings_model or "openai/text-embedding-3-small"
 
     def extract_structured_data(self, text: str) -> dict:
         try:
             response = self.client.chat.completions.create(
-                model=self._extraction_model,
+                model=self.extraction_model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text}
@@ -216,27 +215,26 @@ class OpenRouterProvider(BaseAIProvider):
                 response_format={"type": "json_object"}
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=self._extraction_model,
+                provider=self._provider_name, model=self.extraction_model,
                 operation="extraction", response=response,
                 context=f"extract_structured_data ({len(text)} chars)"
             )
             content = response.choices[0].message.content
             if content is None:
-                return {"skills": [], "summary": ""}
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
             return json.loads(content)
         except Exception as e:
             print(f"[OpenRouter Error] {e}")
-            return {"skills": [], "summary": ""}
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
     def generate_embedding(self, text: str) -> list:
-        # OpenRouter typically routes to OpenAI-compatible embedding endpoints
         try:
             response = self.client.embeddings.create(
                 input=text,
-                model=self._embedding_model
+                model=self.embeddings_model
             )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=self._embedding_model,
+                provider=self._provider_name, model=self.embeddings_model,
                 operation="embedding", response=response,
                 context=f"generate_embedding ({len(text)} chars)"
             )
@@ -246,40 +244,46 @@ class OpenRouterProvider(BaseAIProvider):
             return []
 
 class LMStudioProvider(BaseAIProvider):
-    """Local provider using LM Studio's OpenAI-compatible local server."""
     def __init__(self, base_url="http://localhost", port='1234', api_key="lm-studio", extraction_model="local-model", embeddings_model="local-model"):
         self.base_url = base_url
         self.port = port
         self._api_base = f'{base_url}:{port}/v1'
         self.client = OpenAI(base_url=self._api_base, api_key=api_key)
         self._provider_name = "lm_studio"
-        self.extraction_model = extraction_model
-        self.embeddings_model = embeddings_model
+        self.extraction_model = extraction_model or "local-model"
+        self.embeddings_model = embeddings_model or "local-model"
         self._model_loaded = False
-        # Import requests here so the module can be used without requests installed
-        import requests as _req
-        self._http = _req
+        self._http = requests
 
     def _get_loaded_model_ids(self) -> list:
-        urls = [
-            f"{self.base_url}:{self.port}/api/v1/models",
-            f"{self._api_base}/models"
-        ]
-        for url in urls:
-            try:
-                resp = self._http.get(url, timeout=5)
-                if resp.status_code == 200:
-                    models = resp.json().get("data", [])
-                    return [m.get("id") for m in models if m.get("id")]
-            except Exception:
-                pass
+        url_api = f"{self.base_url}:{self.port}/api/v1/models"
+        try:
+            resp = self._http.get(url_api, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json()
+                if "models" in data:
+                    loaded = []
+                    for m in data["models"]:
+                        if m.get("loaded_instances"):
+                            loaded.append(m.get("key"))
+                    return loaded
+        except Exception:
+            pass
+
+        url_v1 = f"{self._api_base}/models"
+        try:
+            resp = self._http.get(url_v1, timeout=5)
+            if resp.status_code == 200:
+                models = resp.json().get("data", [])
+                return [m.get("id") for m in models if m.get("id")]
+        except Exception:
+            pass
         return []
 
     def _load_single_model(self, model_name: str) -> None:
         if not model_name:
             return
 
-        # ── Clear existing models from memory first ──
         loaded_ids = self._get_loaded_model_ids()
         if loaded_ids:
             if len(loaded_ids) == 1 and loaded_ids[0] == model_name:
@@ -290,7 +294,6 @@ class LMStudioProvider(BaseAIProvider):
             for m_id in loaded_ids:
                 self._unload_single_model(m_id)
 
-            # Wait for all models to unload
             import time
             poll_interval = 2
             deadline = time.time() + 45
@@ -364,24 +367,14 @@ class LMStudioProvider(BaseAIProvider):
             print(f"[LM Studio] Error/Warning sending unload request for '{model_name}': {last_err}")
 
     def load_model(self) -> None:
-        """
-        Load the extraction model into LM Studio via its HTTP API.
-        """
         self._load_single_model(self.extraction_model)
         self._model_loaded = True
 
     def unload_model(self) -> None:
-        """
-        Unload the extraction model from LM Studio memory via its HTTP API.
-        """
         self._unload_single_model(self.extraction_model)
         self._model_loaded = False
 
     def wait_for_model_loaded(self, timeout: int = 360, poll_interval: int = 5) -> bool:
-        """
-        Poll LM Studio's models endpoint until the extraction model appears
-        as loaded, or until *timeout* seconds have elapsed.
-        """
         import time
         model_name = self.extraction_model
         deadline = time.time() + timeout
@@ -426,7 +419,59 @@ class LMStudioProvider(BaseAIProvider):
         print(f"[LM Studio] Timeout waiting for model '{model_name}' to unload after {timeout}s.")
         return False
 
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[LM Studio Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
+    def generate_embedding(self, text: str) -> list:
+        url = f"{self.base_url}:{self.port}/v1/embeddings"
+        model_name = self.embeddings_model or "local-model"
+        payload = {
+            "model": model_name,
+            "input": text
+        }
+        try:
+            resp = self._http.post(url, json=payload, timeout=120)
+            if resp.status_code != 200:
+                print(f"[LM Studio Embedding Error] HTTP {resp.status_code}: {resp.text[:500]}")
+                return []
+            data = resp.json()
+            embedding = data["data"][0]["embedding"]
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=model_name,
+                operation="embedding", response=data,
+                context=f"generate_embedding ({len(text)} chars)"
+            )
+            return embedding
+        except Exception as e:
+            print(f"[LM Studio Embedding Error] {e}")
+            return []
+
+class OllamaProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        base_url = f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1"
+        self.client = OpenAI(base_url=base_url, api_key=api_key or os.getenv("OLLAMA_API_KEY", "ollama"))
+        self._provider_name = "ollama"
+        self.extraction_model = extraction_model or "llama3"
+        self.embeddings_model = embeddings_model or "nomic-embed-text"
 
     def extract_structured_data(self, text: str) -> dict:
         try:
@@ -444,44 +489,262 @@ class LMStudioProvider(BaseAIProvider):
             )
             content = response.choices[0].message.content
             if content is None:
-                return {"skills": [], "summary": ""}
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
             return json.loads(content)
         except Exception as e:
-            print(f"[LM Studio Error] {e}")
-            return {"skills": [], "summary": ""}
+            print(f"[Ollama Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
 
     def generate_embedding(self, text: str) -> list:
-        """
-        Generate an embedding via LM Studio's /v1/embeddings endpoint.
-        Uses raw HTTP requests so we can control the payload format regardless
-        of which model is currently loaded in the server.
-        """
-        url = f"{self.base_url}:{self.port}/v1/embeddings"
-        if self.embeddings_model:
-            model_name = self.embeddings_model
-        else:
-            model_name = "local-model"
-        payload = {
-            "model": model_name,
-            "input": text
-        }
         try:
-            resp = self._http.post(url, json=payload, timeout=120)
-            if resp.status_code != 200:
-                print(f"[LM Studio Embedding Error] HTTP {resp.status_code}: {resp.text[:500]}")
-                return []
-            data = resp.json()
-            embedding = data["data"][0]["embedding"]
-            # record usage via the response dictionary to extract actual tokens if present
+            response = self.client.embeddings.create(
+                input=text,
+                model=self.embeddings_model
+            )
             usage_tracker.record_from_response(
-                provider=self._provider_name, model=model_name,
-                operation="embedding", response=data,
+                provider=self._provider_name, model=self.embeddings_model,
+                operation="embedding", response=response,
                 context=f"generate_embedding ({len(text)} chars)"
             )
-            return embedding
+            return response.data[0].embedding
         except Exception as e:
-            print(f"[LM Studio Embedding Error] {e}")
+            print(f"[Ollama Embedding Error] {e}")
             return []
+
+class GrokProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        self.api_key = api_key or os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+        self.client = OpenAI(base_url="https://api.x.ai/v1", api_key=self.api_key)
+        self._provider_name = "grok"
+        self.extraction_model = extraction_model or "grok-2-1212"
+        self.embeddings_model = embeddings_model or ""
+
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Grok Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+
+    def generate_embedding(self, text: str) -> list:
+        print("[Grok] Embeddings not natively supported by Grok API.")
+        return []
+
+class GroqProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        self.api_key = api_key or os.getenv("GROQ_API_KEY")
+        self.client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=self.api_key)
+        self._provider_name = "groq"
+        self.extraction_model = extraction_model or "llama-3.3-70b-versatile"
+        self.embeddings_model = embeddings_model or ""
+
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                response_format={"type": "json_object"}
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Groq Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+
+    def generate_embedding(self, text: str) -> list:
+        print("[Groq] Embeddings not natively supported by Groq API.")
+        return []
+
+class NvidiaNIMProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        self.api_key = api_key or os.getenv("NVIDIA_API_KEY") or os.getenv("NIM_API_KEY")
+        self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=self.api_key)
+        self._provider_name = "nvidia"
+        self.extraction_model = extraction_model or "nvidia/llama-3.1-nemotron-70b-instruct"
+        self.embeddings_model = embeddings_model or "nvidia/embeddings-nv-embed-qa-4"
+
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Nvidia NIM Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+
+    def generate_embedding(self, text: str) -> list:
+        try:
+            response = self.client.embeddings.create(
+                input=text,
+                model=self.embeddings_model
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.embeddings_model,
+                operation="embedding", response=response,
+                context=f"generate_embedding ({len(text)} chars)"
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            print(f"[Nvidia NIM Embedding Error] {e}")
+            return []
+
+class CohereProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        self.api_key = api_key or os.getenv("COHERE_API_KEY")
+        self.client = OpenAI(base_url="https://api.cohere.com/v2", api_key=self.api_key)
+        self._provider_name = "cohere"
+        self.extraction_model = extraction_model or "command-r-plus"
+        self.embeddings_model = embeddings_model or "embed-english-v3.0"
+
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Cohere Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+
+    def generate_embedding(self, text: str) -> list:
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "texts": [text],
+                "model": self.embeddings_model,
+                "input_type": "search_document"
+            }
+            resp = requests.post("https://api.cohere.com/v1/embed", json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                embeddings = data.get("embeddings", [])
+                if embeddings:
+                    usage_tracker.record(
+                        provider=self._provider_name, model=self.embeddings_model,
+                        operation="embedding",
+                        context=f"generate_embedding ({len(text)} chars)"
+                    )
+                    return embeddings[0]
+            else:
+                print(f"[Cohere Embedding Error] HTTP {resp.status_code}: {resp.text}")
+        except Exception as e:
+            print(f"[Cohere Embedding Error] {e}")
+        return []
+
+class HuggingFaceProvider(BaseAIProvider):
+    def __init__(self, api_key=None, extraction_model=None, embeddings_model=None):
+        self.api_key = api_key or os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_API_KEY") or os.getenv("HF_TOKEN")
+        self.client = OpenAI(base_url="https://api-inference.huggingface.co/v1", api_key=self.api_key)
+        self._provider_name = "huggingface"
+        self.extraction_model = extraction_model or "Qwen/Qwen2.5-72B-Instruct"
+        self.embeddings_model = embeddings_model or "BAAI/bge-small-en-v1.5"
+
+    def extract_structured_data(self, text: str) -> dict:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.extraction_model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ]
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.extraction_model,
+                operation="extraction", response=response,
+                context=f"extract_structured_data ({len(text)} chars)"
+            )
+            content = response.choices[0].message.content
+            if content is None:
+                return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+            return json.loads(content)
+        except Exception as e:
+            print(f"[Hugging Face Error] {e}")
+            return {"skills": [], "requirements": [], "summary": "", "pay_range": "Not Specified", "work_type": "Unknown", "seniority": "Unknown"}
+
+    def generate_embedding(self, text: str) -> list:
+        if not self.api_key:
+            try:
+                from sentence_transformers import SentenceTransformer
+                model_name = self.embeddings_model or "all-MiniLM-L6-v2"
+                model = SentenceTransformer(model_name)
+                return model.encode(text).tolist()
+            except Exception as e:
+                print(f"[Hugging Face Local Embedding Error] {e}")
+                return []
+        try:
+            response = self.client.embeddings.create(
+                input=text,
+                model=self.embeddings_model
+            )
+            usage_tracker.record_from_response(
+                provider=self._provider_name, model=self.embeddings_model,
+                operation="embedding", response=response,
+                context=f"generate_embedding ({len(text)} chars)"
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            print(f"[Hugging Face API Embedding Error] {e}. Falling back to local SentenceTransformer...")
+            try:
+                from sentence_transformers import SentenceTransformer
+                model_name = self.embeddings_model or "all-MiniLM-L6-v2"
+                model = SentenceTransformer(model_name)
+                return model.encode(text).tolist()
+            except Exception as le:
+                print(f"[Hugging Face Local Fallback Embedding Error] {le}")
+                return []
 
 class AIEngine:
     """The main controller that manages multiple AI providers."""
@@ -490,7 +753,6 @@ class AIEngine:
         self.extraction_model = extraction_model
         self.embeddings_model = embeddings_model
         self._providers = {}
-        # Initialize the default provider immediately
         self._get_provider(self.default_provider_name)
 
     def _get_provider(self, name: str) -> BaseAIProvider:
@@ -500,17 +762,23 @@ class AIEngine:
 
         provider_map = {
             "chatgpt": OpenAIProvider,
+            "openai": OpenAIProvider,
             "claude": ClaudeProvider,
             "gemini": GeminiProvider,
             "openrouter": OpenRouterProvider,
             "lm_studio": LMStudioProvider,
+            "ollama": OllamaProvider,
+            "grok": GrokProvider,
+            "groq": GroqProvider,
+            "nvidia": NvidiaNIMProvider,
+            "cohere": CohereProvider,
+            "huggingface": HuggingFaceProvider,
         }
         
         provider_class = provider_map.get(name)
         if not provider_class:
             raise ValueError(f"Unknown provider: {name}. Choose from {list(provider_map.keys())}")
         
-        # Handle LM Studio's custom constructor arguments
         if name == "lm_studio":
             instance = provider_class(
                 base_url=os.getenv('LMS_URL', 'http://localhost'),
@@ -519,30 +787,31 @@ class AIEngine:
                 extraction_model=self.extraction_model,
                 embeddings_model=self.embeddings_model
             )
+        elif name == "ollama":
+            instance = provider_class(
+                extraction_model=self.extraction_model,
+                embeddings_model=self.embeddings_model
+            )
         else:
-            instance = provider_class()
+            instance = provider_class(
+                extraction_model=self.extraction_model,
+                embeddings_model=self.embeddings_model
+            )
         
         self._providers[name] = instance
         return instance
 
     def extract(self, text: str, provider_name: str | None = None) -> dict:
-        """Uses the specified provider (or default) to extract data."""
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         return provider.extract_structured_data(text)
 
     def embed(self, text: str, provider_name: str | None = None) -> list:
-        """Uses the specified provider (or default) to generate embeddings."""
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         return provider.generate_embedding(text)
 
     def load_model(self, provider_name: str | None = None, model_name: str | None = None) -> None:
-        """
-        Instruct the provider to load its model into memory.
-        For LM Studio this sends a load request to the local server.
-        Other providers treat this as a no-op.
-        """
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         if isinstance(provider, LMStudioProvider) and model_name:
@@ -551,11 +820,6 @@ class AIEngine:
             provider.load_model()
 
     def unload_model(self, provider_name: str | None = None, model_name: str | None = None) -> None:
-        """
-        Instruct the provider to unload its model from memory.
-        For LM Studio this sends an unload request to the local server.
-        Other providers treat this as a no-op.
-        """
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         if isinstance(provider, LMStudioProvider) and model_name:
@@ -566,22 +830,8 @@ class AIEngine:
     def wait_for_model_loaded(self, provider_name: str | None = None,
                                timeout: int = 180, poll_interval: int = 5,
                                model_name: str | None = None) -> bool:
-        """
-        Wait for the provider's model to become available / ready.
-        For LM Studio this polls the /v1/models endpoint.
-
-        Args:
-            provider_name: Provider to check. Defaults to the engine's default.
-            timeout: Maximum seconds to wait.
-            poll_interval: Seconds between polls.
-            model_name: Optional specific model to wait for.
-
-        Returns:
-            True if model became available, False otherwise.
-        """
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
-        # Only LMStudioProvider has this method — others always return True
         if isinstance(provider, LMStudioProvider):
             if model_name:
                 return provider.wait_for_model_loaded_by_name(model_name, timeout=timeout, poll_interval=poll_interval)
@@ -591,10 +841,6 @@ class AIEngine:
     def wait_for_model_unloaded(self, provider_name: str | None = None,
                                  timeout: int = 180, poll_interval: int = 5,
                                  model_name: str | None = None) -> bool:
-        """
-        Wait for the provider's model to become unloaded / released.
-        For LM Studio this polls the /v1/models endpoint.
-        """
         target = provider_name if provider_name else self.default_provider_name
         provider = self._get_provider(target)
         if isinstance(provider, LMStudioProvider):

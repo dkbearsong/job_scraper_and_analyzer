@@ -121,6 +121,7 @@ class PostgresManager:
             cur.execute(statement, params)
             if fetch:
                 rows = cur.fetchall()
+                conn.commit()
                 return rows
             conn.commit()
         return None

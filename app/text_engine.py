@@ -73,21 +73,35 @@ class TextProcessor:
             return "Onsite"
         return "Unknown"
 
-    def detect_seniority(self, text: str) -> str:
+    def detect_seniority(self, text: str, title: str = "") -> str:
         """Identifies seniority level via keyword matching."""
-        text = self._prepare_text(text)
-        # Order matters: check for higher levels first
+        # 1. Check title first (highly reliable) using word boundaries
+        if title:
+            title_clean = self._prepare_text(title)
+            title_rules = {
+                "C-Suite": r'\bc-suite\b|\bexecutive\b|\bvp\b|\bvice[ -]president\b|\bchief\b',
+                "Management": r'\bmanager\b|\bdirector\b|\bhead of\b|\blead\b',
+                "Senior": r'\bsenior\b|\bsr\b|\bprincipal\b|\bstaff\b',
+                "Mid-Level": r'\bintermediate\b|\bmid-level\b|\bmid\b|\bspecialist\b',
+                "Junior": r'\bjunior\b|\bjr\b|\bentry level\b|\bassociate\b|\bintern\b'
+            }
+            for level, pattern in title_rules.items():
+                if re.search(pattern, title_clean):
+                    return level
+
+        # 2. Check full text (description) using word boundaries to avoid body context fragments matching
+        text_clean = self._prepare_text(text)
         rules = {
-            "C-Suite": r'c-suite|executive|vp|vice president|chief officer',
-            "Management": r'manager|director|head of|lead',
-            "Senior": r'senior|sr\.|sr |principal|staff',
-            "Mid-Level": r'intermediate|mid-level|specialist',
-            "Junior": r'junior|jr\.|entry level|associate|intern'
+            "C-Suite": r'\bc-suite\b|\bexecutive\b|\bvp\b|\bvice[ -]president\b|\bchief officer\b',
+            "Management": r'\bmanager\b|\bdirector\b|\bhead of\b|\blead\b',
+            "Senior": r'\bsenior\b|\bsr\b|\bprincipal\b|\bstaff\b',
+            "Mid-Level": r'\bintermediate\b|\bmid-level\b|\bspecialist\b',
+            "Junior": r'\bjunior\b|\bjr\b|\bentry level\b|\bassociate\b|\bintern\b'
         }
         for level, pattern in rules.items():
-            if re.search(pattern, text):
+            if re.search(pattern, text_clean):
                 return level
-        return "Entry/Unknown"
+        return "Unknown"
 
     def extract_salary(self, text: str) -> str:
         """Attempts to find a salary range in the text."""

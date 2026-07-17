@@ -24,13 +24,99 @@ from app.llm_usage_tracker import usage_tracker
 # STAGE 6: CHEAP LLM CLASSIFICATION PROMPTS
 # =====================================================
 
-CHEAP_LLM_SYSTEM_PROMPT = """You are a recruitment fit analyzer. Analyze the job description and candidate profile to produce a structured fit assessment.
+CHEAP_LLM_SYSTEM_PROMPT = """Your task is to evaluate the match between a Job Description (Title, company job description, extracted skills, requirements) and a Candidate Profile. Previous analysis from a smaller, cheaper LLM will be included with its semantic score, fit score, decision, strengths, and concerns.
 
 RULES:
 - Return ONLY valid JSON
 - No explanations, no chain-of-thought
 - Keep outputs compact
 - Focus on factual fit analysis
+
+You must evaluate four specific categories out of 10 points each, follow the strict rubric, and output ONLY a raw JSON object.
+
+[SCORING RULES]
+To determine the final "fit_score", you must internally calculate four sub-scores (0 to 25 points each) and sum them up:
+1. Hard Skills (Max 25 pts): Deduct 5 points for every missing critical skill.
+2. Experience (Max 25 pts): Deduct 5 points per year deficit against the requirement.
+3. Industry Domain (Max 25 pts): 25 = Exact match. 12 = Adjacent industry. 0 = Unrelated.
+4. Education/Certs (Max 25 pts): 25 = Meets/exceeds. 0 = Missing mandatory degree/license.
+
+[DECISION RULES]
+- "apply": Fit score is 80 or above.
+- "maybe": Fit score is between 50 and 79.
+- "skip": Fit score is below 50.
+
+Output ONLY a raw JSON object. Do not include markdown formatting like ```json, introductory text, or explanations outside of the JSON block.
+
+---
+[START OF FEW-SHOT EXAMPLES]
+
+EXAMPLE 1: HIGH-FIT MATCH
+
+[JOB DESCRIPTION]
+Title: Senior React Developer
+Summary: Leading e-commerce platform seeking a frontend expert to scale our core marketplace application.
+Required Skills: React, TypeScript, Next.js, Redux, Jest, Webpack.
+Required Experience: 5+ years in frontend engineering, specifically in E-commerce/B2C.
+Education: Bachelor's in Computer Science or equivalent experience.
+
+[CANDIDATE PROFILE]
+Current Title: Staff Frontend Engineer
+Summary: 6 years of experience building high-traffic web apps. Expert in modern JavaScript frameworks.
+Skills: React, TypeScript, Next.js, Redux, TailwindCSS, Jest, Cypress, AWS.
+Experience History: 4 years at Shopify (E-commerce), 2 years at FinTech startup.
+Education: B.S. in Software Engineering.
+
+[OUTPUT]
+{
+  "fit_score": 100,
+  "decision": "apply",
+  "strengths": [
+    "Exceeds required years of experience",
+    "Flawless core tech stack match",
+    "Strong e-commerce background"
+  ],
+  "concerns": []
+}
+
+---
+
+EXAMPLE 2: MID-FIT MATCH
+
+[JOB DESCRIPTION]
+Title: Senior React Developer
+Summary: Leading e-commerce platform seeking a frontend expert to scale our core marketplace application.
+Required Skills: React, TypeScript, Next.js, Redux, Jest, Webpack.
+Required Experience: 5+ years in frontend engineering, specifically in E-commerce/B2C.
+Education: Bachelor's in Computer Science or equivalent experience.
+
+[CANDIDATE PROFILE]
+Current Title: Full Stack Developer
+Summary: 5 years developing web applications. Transitioning from backend-heavy roles to pure frontend.
+Skills: JavaScript, React, Node.js, Express, PostgreSQL, Docker, Git. (Missing: TypeScript, Next.js, Jest)
+Experience History: 5 years at CyberSecurity Firm (B2B SaaS).
+Education: Self-taught, No Degree.
+
+[OUTPUT]
+{
+  "fit_score": 53,
+  "decision": "maybe",
+  "strengths": [
+    "Meets the 5-year total experience requirement",
+    "Strong foundation in base React"
+  ],
+  "concerns": [
+    "Missing critical stack elements like TypeScript and Next.js",
+    "No e-commerce or B2C domain experience",
+    "Lacks the requested Computer Science degree"
+  ]
+}
+
+[END OF FEW-SHOT EXAMPLES]
+---
+
+[CURRENT EVALUATION]
+Evaluate the following target profile and output the JSON using the exact logic demonstrated above.
 
 OUTPUT FORMAT:
 {
@@ -68,6 +154,99 @@ RULES:
 - Identify tailoring opportunities
 - Identify likely recruiter bait
 - Be critical and thorough
+
+[SCORING & LOGIC RULES]
+To determine the "final_score", you must internally calculate four sub-scores (0 to 25 points each) and sum them up:
+1. Hard Skills (Max 25 pts): Deduct 5 points for every missing critical skill.
+2. Experience (Max 25 pts): Deduct 5 points per year deficit against the requirement.
+3. Industry Domain (Max 25 pts): 25 = Exact match. 12 = Adjacent industry. 0 = Unrelated.
+4. Education/Certs (Max 25 pts): 25 = Meets/exceeds. 0 = Missing mandatory degree/license.
+
+[FIELD ALIGNMENT RULES]
+- "priority" & "apply_recommendation": 
+  * Score 85-100: priority = "high", apply_recommendation = "apply"
+  * Score 70-84: priority = "medium", apply_recommendation = "apply"
+  * Score 50-69: priority = "low", apply_recommendation = "maybe"
+  * Score 0-49: priority = "skip", apply_recommendation = "skip"
+- "recruiter_bait_likelihood": Rate "high" if candidate has exact target keywords and top-tier past employers; "medium" if qualified but generic; "low" if missing core requirements.
+- "red_flags": Missing mandatory elements, job-hopping, or significant skill deficits.
+- "tailoring_notes": Actionable resume tweaks or specific gaps the candidate needs to address.
+
+Output ONLY a raw JSON object. Do not include markdown formatting like ```json, introductory text, or explanations outside of the JSON block.
+
+---
+[START OF FEW-SHOT EXAMPLES]
+
+EXAMPLE 1: HIGH-FIT MATCH
+
+[JOB DESCRIPTION]
+Title: Senior React Developer
+Summary: Leading e-commerce platform seeking a frontend expert to scale our core marketplace application.
+Required Skills: React, TypeScript, Next.js, Redux, Jest, Webpack.
+Required Experience: 5+ years in frontend engineering, specifically in E-commerce/B2C.
+Education: Bachelor's in Computer Science or equivalent experience.
+
+[CANDIDATE PROFILE]
+Current Title: Staff Frontend Engineer
+Summary: 6 years of experience building high-traffic web apps. Expert in modern JavaScript frameworks.
+Skills: React, TypeScript, Next.js, Redux, TailwindCSS, Jest, Cypress, AWS.
+Experience History: 4 years at Shopify (E-commerce), 2 years at FinTech startup.
+Education: B.S. in Software Engineering.
+
+[OUTPUT]
+{
+  "final_score": 100,
+  "priority": "high",
+  "apply_recommendation": "apply",
+  "red_flags": [],
+  "tailoring_notes": [
+    "Highlight Webpack optimization techniques if applicable",
+    "Emphasize the scale of traffic managed at Shopify"
+  ],
+  "recruiter_bait_likelihood": "high",
+  "detailed_fit_analysis": "The candidate perfectly matches the tech stack, exceeds the experience requirement, and brings elite e-commerce domain expertise from Shopify."
+}
+
+---
+
+EXAMPLE 2: MID-FIT MATCH WITH GAPS
+
+[JOB DESCRIPTION]
+Title: Senior React Developer
+Summary: Leading e-commerce platform seeking a frontend expert to scale our core marketplace application.
+Required Skills: React, TypeScript, Next.js, Redux, Jest, Webpack.
+Required Experience: 5+ years in frontend engineering, specifically in E-commerce/B2C.
+Education: Bachelor's in Computer Science or equivalent experience.
+
+[CANDIDATE PROFILE]
+Current Title: Full Stack Developer
+Summary: 5 years developing web applications. Transitioning from backend-heavy roles to pure frontend.
+Skills: JavaScript, React, Node.js, Express, PostgreSQL, Docker, Git.
+Experience History: 5 years at CyberSecurity Firm (B2B SaaS).
+Education: Self-taught, No Degree.
+
+[OUTPUT]
+{
+  "final_score": 53,
+  "priority": "low",
+  "apply_recommendation": "maybe",
+  "red_flags": [
+    "Missing critical stack elements including TypeScript, Next.js, and Jest",
+    "Completely lacks the required e-commerce domain experience"
+  ],
+  "tailoring_notes": [
+    "Must add projects demonstrating TypeScript and Next.js proficiency",
+    "Reframe B2B SaaS experience to emphasize user-facing transactional features"
+  ],
+  "recruiter_bait_likelihood": "low",
+  "detailed_fit_analysis": "While the candidate meets the raw 5-year timeline requirement, heavy deficits in the core frontend tech stack and domain alignment make them a risky fit."
+}
+
+[END OF FEW-SHOT EXAMPLES]
+---
+
+[CURRENT EVALUATION]
+Evaluate the following target profile and output the JSON using the exact logic demonstrated above.
 
 OUTPUT FORMAT:
 {
@@ -183,6 +362,7 @@ class CheapLLMClassifier:
         self._init_client()
     
     def _init_client(self):
+        self.provider = self.provider.lower()
         if self.provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             self.client = genai.Client(api_key=api_key)
@@ -200,6 +380,26 @@ class CheapLLMClassifier:
         elif self.provider == "ollama":
             self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
             self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "llama3")
+        elif self.provider == "grok":
+            api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+            self.client = OpenAI(base_url="https://api.x.ai/v1", api_key=api_key)
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "grok-2-1212")
+        elif self.provider == "groq":
+            api_key = os.getenv("GROQ_API_KEY")
+            self.client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "llama-3.3-70b-specdec")
+        elif self.provider == "nvidia":
+            api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NIM_API_KEY")
+            self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key)
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+        elif self.provider == "cohere":
+            api_key = os.getenv("COHERE_API_KEY")
+            self.client = OpenAI(base_url="https://api.cohere.com/v2", api_key=api_key)
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "command-r-plus")
+        elif self.provider == "huggingface":
+            api_key = os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_API_KEY") or os.getenv("HF_TOKEN")
+            self.client = OpenAI(base_url="https://api-inference.huggingface.co/v1", api_key=api_key)
+            self.model = self.model or os.getenv("CHEAP_LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -240,9 +440,9 @@ class CheapLLMClassifier:
                     context=f"cheap_llm: {job_title}"
                 )
                 content = response.text
-            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
+            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter", "grok", "groq", "nvidia", "cohere", "huggingface"):
                 kwa = {}
-                if self.provider != "lm_studio":
+                if self.provider not in ("lm_studio", "ollama"):
                     kwa["response_format"] = {"type": "json_object"}
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
@@ -338,6 +538,7 @@ class StrongLLMReranker:
         self._init_client()
     
     def _init_client(self):
+        self.provider = self.provider.lower()
         if self.provider == "claude":
             api_key = os.getenv("ANTHROPIC_API_KEY")
             self.client = Anthropic(api_key=api_key)
@@ -359,6 +560,26 @@ class StrongLLMReranker:
         elif self.provider == "ollama":
             self.client = OpenAI(base_url=f"{os.getenv('OLLAMA_URL', 'http://localhost:11434')}/v1", api_key=os.getenv("OLLAMA_API_KEY", "ollama"))
             self.model = self.model or os.getenv("STRONG_LLM_MODEL", "llama3")
+        elif self.provider == "grok":
+            api_key = os.getenv("GROK_API_KEY") or os.getenv("XAI_API_KEY")
+            self.client = OpenAI(base_url="https://api.x.ai/v1", api_key=api_key)
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "grok-2-1212")
+        elif self.provider == "groq":
+            api_key = os.getenv("GROQ_API_KEY")
+            self.client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "llama-3.3-70b-versatile")
+        elif self.provider == "nvidia":
+            api_key = os.getenv("NVIDIA_API_KEY") or os.getenv("NIM_API_KEY")
+            self.client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key)
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
+        elif self.provider == "cohere":
+            api_key = os.getenv("COHERE_API_KEY")
+            self.client = OpenAI(base_url="https://api.cohere.com/v2", api_key=api_key)
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "command-r-plus")
+        elif self.provider == "huggingface":
+            api_key = os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_API_KEY") or os.getenv("HF_TOKEN")
+            self.client = OpenAI(base_url="https://api-inference.huggingface.co/v1", api_key=api_key)
+            self.model = self.model or os.getenv("STRONG_LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct")
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
     
@@ -421,9 +642,9 @@ class StrongLLMReranker:
                         content = getattr(first_block, "output_text", None)
                     if content is None:
                         content = str(first_block)
-            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter"):
+            elif self.provider in ("openai", "lm_studio", "ollama", "openrouter", "grok", "groq", "nvidia", "cohere", "huggingface"):
                 kwa = {}
-                if self.provider != "lm_studio":
+                if self.provider not in ("lm_studio", "ollama"):
                     kwa["response_format"] = {"type": "json_object"}
                 response = self.client.chat.completions.create( # type: ignore
                     model=self.model,
@@ -681,18 +902,25 @@ async def process_stage_6(jobs: List[Dict], classifier: CheapLLMClassifier,
                           batch_size: int = 5) -> List[Dict]:
     """
     Process Stage 6: Cheap LLM Classification on filtered job pool.
+    Runs concurrently or sequentially based on AILimiter settings.
     """
+    from app.ai_limiter import AILimiter, run_in_thread
+    
+    limiter = AILimiter("stage_6", getattr(classifier, "provider", "gemini"))
     print(f"Stage 6: Running cheap LLM classification on {len(jobs)} jobs...")
     
-    for i, job in enumerate(jobs):
-        print(f"  Processing job {i+1}/{len(jobs)}: {job.get('features', {}).get('title', 'Unknown')}")
-        
-        result = classifier.classify(job, candidate_profile, candidate_skills)
-        job['cheap_llm_result'] = result
-        
-        # Rate limiting
-        if (i + 1) % batch_size == 0:
-            await asyncio.sleep(2)
+    async def classify_job(job, index):
+        title = job.get('features', {}).get('title', 'Unknown')
+        desc = job.get('features', {}).get('description', '')
+        est_tokens = (len(desc) // 4) + (len(candidate_profile) // 4) + 500
+        async with limiter.semaphore:
+            await limiter.wait(est_tokens)
+            print(f"  Classifying job {index+1}/{len(jobs)}: {title}")
+            result = await run_in_thread(classifier.classify, job, candidate_profile, candidate_skills)
+            job['cheap_llm_result'] = result
+            
+    tasks = [classify_job(job, i) for i, job in enumerate(jobs)]
+    await asyncio.gather(*tasks)
     
     # Filter to only jobs with "apply" or "maybe" decisions
     shortlisted = [j for j in jobs if j.get('cheap_llm_result', {}).get('decision') in ('apply', 'maybe')]
@@ -706,22 +934,30 @@ async def process_stage_7(jobs: List[Dict], reranker: StrongLLMReranker,
                           top_n: int = 20) -> List[Dict]:
     """
     Process Stage 7: Strong LLM Reranking on top candidates.
+    Runs concurrently or sequentially based on AILimiter settings.
     """
+    from app.ai_limiter import AILimiter, run_in_thread
+    
     # Sort by cheap LLM score and take top N
     jobs_sorted = sorted(jobs, key=lambda x: x.get('cheap_llm_result', {}).get('fit_score', 0), reverse=True)
     top_jobs = jobs_sorted[:top_n]
     
+    limiter = AILimiter("stage_7", getattr(reranker, "provider", "claude"))
     print(f"Stage 7: Running strong LLM reranking on top {len(top_jobs)} jobs...")
     
-    for i, job in enumerate(top_jobs):
-        print(f"  Deep analysis {i+1}/{len(top_jobs)}: {job.get('features', {}).get('title', 'Unknown')}")
-        
+    async def rerank_job(job, index):
+        title = job.get('features', {}).get('title', 'Unknown')
         cheap_result = job.get('cheap_llm_result', {})
-        result = reranker.rerank(job, candidate_profile, candidate_skills, cheap_result)
-        job['strong_llm_result'] = result
-        
-        # Rate limiting for expensive API calls
-        await asyncio.sleep(3)
+        desc = job.get('features', {}).get('description', '')
+        est_tokens = (len(desc) // 4) + (len(candidate_profile) // 4) + 1500
+        async with limiter.semaphore:
+            await limiter.wait(est_tokens)
+            print(f"  Deep analysis {index+1}/{len(top_jobs)}: {title}")
+            result = await run_in_thread(reranker.rerank, job, candidate_profile, candidate_skills, cheap_result)
+            job['strong_llm_result'] = result
+            
+    tasks = [rerank_job(job, i) for i, job in enumerate(top_jobs)]
+    await asyncio.gather(*tasks)
     
     print(f"Stage 7 complete: {len(top_jobs)} jobs deeply analyzed")
     return top_jobs

@@ -393,6 +393,7 @@ class DataPuller:
             # Check work_type
             if update_data.get('work_type') is not None and update_data['work_type'] != "":
                 set_values["work_type"] = update_data.get('work_type')
+                set_values["flexibility"] = update_data.get('work_type')
                 
             # Check timezone
             if update_data.get('timezone') is not None and update_data['timezone'] != "":
@@ -628,7 +629,7 @@ class DataPuller:
 
     def get_archetype_embeddings(self, name: str):
         """Retrieves cached archetype embeddings from the database."""
-        query = "SELECT title_embedding, skills_embedding, responsibilities_embedding, archetype_type, metadata FROM archetype_embeddings WHERE archetype_name = %s"
+        query = "SELECT title_embedding, skills_embedding, responsibilities_embedding, archetype_type, metadata, date_generated FROM archetype_embeddings WHERE archetype_name = %s"
         rows = self.conn.execute_sql(query, (name,), fetch=True)
         if rows:
             # Convert row back to a clean dictionary

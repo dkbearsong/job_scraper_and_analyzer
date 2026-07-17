@@ -1,0 +1,26 @@
+# Test Preferences for Job Filtering
+#
+# Use this file to test rule filtering without modifying user_preferences.yaml.
+
+target_cities:
+  - "Austin, TX"
+  - "Seattle, WA"
+  - "Boston, MA"
+  - "San Francisco, CA"
+  - "Salt Lake City, UT"
+
+work_types:
+  - remote
+  - hybrid
+
+seniority_levels:
+  - mid-level
+  - senior
+
+timezones:
+  - MST
+  - CST
+  - EST
+
+pay_range: "$95k-200k"
+target_city_range: 50
