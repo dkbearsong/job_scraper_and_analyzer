@@ -23,11 +23,92 @@ import glob
 from urllib.parse import urlparse
 from typing import Callable, Dict, List, Optional
 from datetime import datetime
+from app.prompt_injection_defender import sanitize_untrusted_text
 
 import pandas as pd
 from jobspy import scrape_jobs as _scrape_jobs
 
 from app.pull_data import DataPuller
+
+
+def parse_pay_range(val: str) -> str:
+    """
+    Intelligently parses a salary/pay range string, extracting the minimum,
+    maximum, and unit (hourly or annual).
+    E.g.
+      '270K - 290k Annually' -> '$270k-290k Annual'
+      '$100-$125k'           -> '$100k-125k Annual'
+      '$85k-96k yearly'      -> '$85k-96k Annual'
+      '$60-75 hourly'        -> '$60-75 hour'
+      '24-28 hour'           -> '$24-28 hour'
+      '$25/hour'             -> '$25-25 hour'
+    Anything else gets dropped (returns empty string).
+    """
+    if not val or not isinstance(val, str):
+        return ""
+    
+    val_lower = val.lower().strip()
+    
+    # 1. Determine unit: hour vs Annual
+    unit = None
+    if any(x in val_lower for x in ["hour", "hr", "hourly", "/h"]):
+        unit = "hour"
+    elif any(x in val_lower for x in ["annual", "annually", "year", "yearly", "yr"]):
+        unit = "Annual"
+        
+    # 2. Extract numbers
+    cleaned = val_lower.replace(",", "")
+    
+    # Matches numbers optionally followed by 'k'
+    pattern = r'(\d+(?:\.\d+)?)\s*(k)?'
+    matches = re.findall(pattern, cleaned)
+    
+    if not matches:
+        return ""
+        
+    numbers = []
+    has_k = False
+    
+    for num_str, k_suffix in matches:
+        try:
+            num = float(num_str)
+            if num.is_integer():
+                num = int(num)
+                
+            if num >= 1000:
+                num = num / 1000
+                if num.is_integer():
+                    num = int(num)
+                has_k = True
+                
+            if k_suffix:
+                has_k = True
+                
+            numbers.append(num)
+        except ValueError:
+            continue
+            
+    if not numbers:
+        return ""
+        
+    # Determine unit if not explicitly found
+    if not unit:
+        if has_k or any(n >= 100 for n in numbers):
+            unit = "Annual"
+        else:
+            unit = "hour"
+            
+    # Format min and max
+    if len(numbers) >= 2:
+        min_val, max_val = numbers[0], numbers[1]
+    else:
+        min_val = max_val = numbers[0]
+        
+    if unit == "Annual":
+        return f"${min_val}k-{max_val}k Annual"
+    else:
+        return f"${min_val}-{max_val} hour"
+
 
 
 # ── Per-domain exponential backoff state ──
@@ -40,6 +121,56 @@ _BACKOFF_BASE_DELAY: float = 1.0
 _BACKOFF_MAX_DELAY: float = 120.0
 _BACKOFF_FACTOR: float = 2.0
 _BACKOFF_SUCCESS_RESET: int = 3
+# ── Global scraping statistics tracking ──
+_global_scraped_by_source: Dict[str, int] = {}
+_global_failed_by_source: Dict[str, int] = {}
+_processed_job_keys: set = set()
+
+
+def _print_and_log_stats() -> None:
+    """Print cumulative scraping statistics by source and save them to a log file."""
+    if not _global_scraped_by_source:
+        return
+
+    print("\n--- Scraping Statistics by Source ---")
+    for src in sorted(_global_scraped_by_source.keys()):
+        total = _global_scraped_by_source[src]
+        failed = _global_failed_by_source.get(src, 0)
+        pct = (failed / total * 100) if total > 0 else 0.0
+        print(f"  {src}: {failed} / {total} failed to scrape descriptions ({pct:.1f}%)")
+    
+    overall_total = sum(_global_scraped_by_source.values())
+    overall_failed = sum(_global_failed_by_source.values())
+    overall_pct = (overall_failed / overall_total * 100) if overall_total > 0 else 0.0
+    print(f"  Total: {overall_failed} / {overall_total} failed to scrape descriptions ({overall_pct:.1f}%)")
+    print("------------------------------------")
+
+    # Save to a separate log file
+    stats_filename = f"scraping_stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    stats_filepath = os.path.join("logs", "stats", stats_filename)
+    try:
+        os.makedirs(os.path.join("logs", "stats"), exist_ok=True)
+        stats_data = {
+            "timestamp": datetime.now().isoformat(),
+            "stats_by_source": {
+                src: {
+                    "failed": _global_failed_by_source.get(src, 0),
+                    "total": total,
+                    "failure_rate_pct": round((_global_failed_by_source.get(src, 0) / total * 100), 2) if total > 0 else 0.0
+                }
+                for src, total in _global_scraped_by_source.items()
+            },
+            "overall": {
+                "failed": overall_failed,
+                "total": overall_total,
+                "failure_rate_pct": round(overall_pct, 2)
+            }
+        }
+        with open(stats_filepath, "w", encoding="utf-8") as f:
+            json.dump(stats_data, f, indent=2)
+        print(f"  - Saved scraping statistics to {stats_filepath}")
+    except Exception as e:
+        print(f"Warning: failed to write statistics log file '{stats_filepath}': {e}")
 
 
 _db_lock = asyncio.Lock()
@@ -224,6 +355,13 @@ def scrape_single_job_board(
                     r"location", "", item["location"], flags=re.IGNORECASE
                 )
             maker["location"] = item["location"]
+        
+        # Parse pay range if present
+        pay_raw = item.get("pay_range") or item.get("pay") or item.get("pay_rate")
+        pay_parsed = parse_pay_range(pay_raw) if pay_raw else ""
+        maker["pay"] = pay_parsed
+        maker["pay_rate"] = pay_parsed
+
         company_list.append(maker)
     return company_list
 
@@ -295,7 +433,7 @@ async def scrape_sites(
         if not details_parts:
             details_parts.append("No error message provided.")
         print(
-            f"Scraping data failed. Status code {new_data['status_code']}. "
+            f"Scraping data failed for {i.get('company', 'Unknown')}. Status code {new_data['status_code']}. "
             + " | ".join(details_parts)
         )
         return None
@@ -435,12 +573,19 @@ async def scrape_job_descriptions(
                                 if verbose:
                                     print(f"    Found description with selector: '{selector}' ({len(desc_text)} chars)")
                                 break
+                        
+                        # Parse pay range if present in scraped page
+                        scraped_pay = first_item.get("pay_range") or first_item.get("pay") or first_item.get("pay_rate")
+                        if scraped_pay:
+                            pay_parsed = parse_pay_range(scraped_pay)
+                            job["pay"] = pay_parsed
+                            job["pay_rate"] = pay_parsed
             except Exception as e:
                 if verbose:
                     print(f"    Request failed for {job_url}: {e}")
 
         if description:
-            job["description"] = description
+            job["description"] = sanitize_untrusted_text(description)
             async with counter_lock:
                 jobs_with_descriptions += 1
         else:
@@ -581,7 +726,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                 "date": row[5] if len(row) > 5 else None,
             })
 
-    print(f"Found {len(jobs_without_desc)} jobs in DB missing descriptions.")
+    print(f"Found {len(jobs_without_desc)} active job(s) in DB missing descriptions (combining newly scraped and pre-existing DB records).")
 
     job_page_strategy_dir = "./job_page_strategy"
     if not os.path.isdir(job_page_strategy_dir):
@@ -617,11 +762,13 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
     skipped_jobs = []
     job_ids_to_skip = []
     enriched_descriptions = {} # url -> description
-
+    enriched_pays = {} # url -> pay
+ 
     skipped_jobs_lock = asyncio.Lock()
     job_ids_to_skip_lock = asyncio.Lock()
     updated_count_lock = asyncio.Lock()
     enriched_descriptions_lock = asyncio.Lock()
+    enriched_pays_lock = asyncio.Lock()
 
     # Group jobs by domain
     domain_to_jobs = defaultdict(list)
@@ -730,6 +877,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         )
 
         description = ""
+        parsed_pay = ""
         async with global_semaphore:
             try:
                 result = await _request_with_domain_backoff(
@@ -756,22 +904,34 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                                 ""
                             )
                         if desc_text and len(desc_text) > 50:
-                            description = desc_text
+                            description = sanitize_untrusted_text(desc_text)
+
+                        # Parse pay range if present in scraped page
+                        scraped_pay = data_result[0].get("pay_range") or data_result[0].get("pay") or data_result[0].get("pay_rate")
+                        if scraped_pay:
+                            parsed_pay = parse_pay_range(scraped_pay)
             except Exception as e:
                 print(f"  Error scraping description for DB job {db_id}: {e}")
 
         if description:
             try:
-                await _safe_db_call(dp.conn.update, "job", {"job_summary": description}, {"id": db_id}, dbname=dp.dbname)
+                update_fields = {"job_summary": description}
+                if parsed_pay:
+                    update_fields["pay_range"] = parsed_pay
+                await _safe_db_call(dp.conn.update, "job", update_fields, {"id": db_id}, dbname=dp.dbname)
                 async with updated_count_lock:
                     updated_count += 1
                 if verbose:
-                    print(f"    Updated DB job {db_id} with description ({len(description)} chars)")
+                    pay_log = f", pay_range={parsed_pay}" if parsed_pay else ""
+                    print(f"    Updated DB job {db_id} with description ({len(description)} chars){pay_log}")
             except Exception as e:
                 print(f"    Failed to update DB record for job {db_id}: {e}")
 
             async with enriched_descriptions_lock:
                 enriched_descriptions[url] = description
+            if parsed_pay:
+                async with enriched_pays_lock:
+                    enriched_pays[url] = parsed_pay
         else:
             if verbose:
                 print(f"    No description found for DB job {db_id} ({url})")
@@ -799,11 +959,14 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         tasks = [process_domain_db_jobs(domain, jobs_list) for domain, jobs_list in domain_to_jobs.items()]
         await asyncio.gather(*tasks)
 
-    # Post-process in-memory data: Enrich descriptions
+    # Post-process in-memory data: Enrich descriptions and pay
     for item in data:
         item_url = item.get("url") or item.get("link")
         if item_url in enriched_descriptions:
             item["description"] = enriched_descriptions[item_url]
+        if item_url in enriched_pays:
+            item["pay"] = enriched_pays[item_url]
+            item["pay_rate"] = enriched_pays[item_url]
     
     # Filter out skipped jobs from the list
     skipped_urls = {item.get("url") or item.get("link") for item in skipped_jobs if item.get("url") or item.get("link")}
@@ -828,7 +991,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         except Exception as e:
             print(f"Warning: failed to write skip log file '{log_filepath}': {e}")
 
-    print(f"Scraped and saved descriptions for {updated_count}/{len(jobs_without_desc)} DB jobs. Skipped {len(skipped_jobs)} jobs.")
+    print(f"Scraped and saved descriptions for {updated_count}/{len(jobs_without_desc)} DB jobs. Marked {len(skipped_jobs)} jobs as skip=True in DB (due to missing strategy files, HTTP errors, or missing URLs).")
     return data
 
 
@@ -908,8 +1071,9 @@ async def _load_jobs_without_embeddings(dp: DataPuller, limit: int = 50) -> list
 
 async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> list:
     """
-    Remove jobs that did not get a description, set skip=True in the database,
-    and log them to a timestamped JSON log file.
+    Filter in-memory results list to keep only jobs that have descriptions.
+    If an in-memory job lacks a description, attempt to populate it from DB first.
+    If still missing, remove it from the active processing pool.
 
     Args:
         results: List of scraped job dicts.
@@ -918,94 +1082,95 @@ async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> l
     Returns:
         Filtered list of jobs that have descriptions.
     """
-    missing_description_indices = [
-        idx for idx, job in enumerate(results)
-        if not job.get("description")
-    ]
-
-    if not missing_description_indices:
+    if not results:
+        _print_and_log_stats()
         return results
 
-    skipped_jobs = []
-    job_ids_to_skip = []
+    def clean_source(s: str) -> str:
+        if not s:
+            return "Unknown"
+        s_str = str(s).strip()
+        return s_str if s_str else "Unknown"
 
-    lookup_query = """
-        SELECT j.id, j.job_name, c.company_name, j.source, j.date_added, j.job_summary
-        FROM job j
-        JOIN company c ON j.company_id = c.id
-        WHERE j.link = %s
-    """
+    # Pre-count jobs that already have descriptions in memory for statistics tracking
+    for idx, job in enumerate(results):
+        if job.get("description"):
+            job_key = job.get("link") or job.get("url") or job.get("id") or f"temp_key_{job.get('title')}_{job.get('company')}_{idx}"
+            if job_key not in _processed_job_keys:
+                _processed_job_keys.add(job_key)
+                link_url = job.get("link") or job.get("url")
+                src = clean_source(job.get("source") or job.get("site") or job.get("source_name") or (_extract_domain(link_url) if link_url else ""))
+                _global_scraped_by_source[src] = _global_scraped_by_source.get(src, 0) + 1
 
-    for idx in missing_description_indices:
+    missing_indices = [idx for idx, job in enumerate(results) if not job.get("description")]
+    if not missing_indices:
+        _print_and_log_stats()
+        return results
+
+    total_missing = len(missing_indices)
+    retained_from_db = 0
+    indices_to_remove = []
+
+    # Batch DB lookup for missing description jobs by ID and link/url
+    job_ids = [results[i].get("id") for i in missing_indices if results[i].get("id") is not None]
+    links = [results[i].get("link") or results[i].get("url") for i in missing_indices if results[i].get("link") or results[i].get("url")]
+
+    db_desc_by_id = {}
+    db_desc_by_link = {}
+    if dp and hasattr(dp, "conn") and dp.conn:
+        try:
+            if job_ids:
+                id_query = "SELECT id, job_summary FROM job WHERE id IN %s AND job_summary IS NOT NULL AND job_summary != ''"
+                id_rows = await _safe_db_call(dp.conn.execute_sql, id_query, (tuple(job_ids),), fetch=True) or []
+                for r in id_rows:
+                    rid = r.get("id") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
+                    rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                    if rid is not None and rsum:
+                        db_desc_by_id[rid] = rsum
+            if links:
+                link_query = "SELECT link, job_summary FROM job WHERE link IN %s AND job_summary IS NOT NULL AND job_summary != ''"
+                link_rows = await _safe_db_call(dp.conn.execute_sql, link_query, (tuple(links),), fetch=True) or []
+                for r in link_rows:
+                    rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
+                    rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                    if rlink and rsum:
+                        db_desc_by_link[rlink] = rsum
+        except Exception as e:
+            print(f"Warning: failed bulk lookup in _process_jobs_without_descriptions: {e}")
+
+    for idx in missing_indices:
         job = results[idx]
-        link = job.get("link") or job.get("url") or ""
-        job_name = job.get("title") or ""
-        source = job.get("source") or ""
-        company_name = job.get("company") or ""
+        jid = job.get("id")
+        jlink = job.get("link") or job.get("url")
+        summary = db_desc_by_id.get(jid) if jid in db_desc_by_id else db_desc_by_link.get(jlink)
 
-        db_id = None
-        job_date = None
-        has_existing_desc = False
-        try:
-            rows = await _safe_db_call(dp.conn.execute_sql, lookup_query, (link,), fetch=True)
-            if rows:
-                row = rows[0]
-                db_id = row.get("id") if (isinstance(row, dict) or hasattr(row, 'get')) else row[0]
-                
-                # Check if job already has a description in the DB to avoid re-scraping skip override
-                existing_desc = row.get("job_summary") if (isinstance(row, dict) or hasattr(row, 'get')) else (row[5] if len(row) > 5 else None)
-                if existing_desc and len(existing_desc.strip()) > 50:
-                    has_existing_desc = True
+        if summary and len(summary.strip()) > 50:
+            job["description"] = summary
+            retained_from_db += 1
+            job_key = jlink or jid or f"temp_key_{idx}"
+            if job_key not in _processed_job_keys:
+                _processed_job_keys.add(job_key)
+                src = clean_source(job.get("source") or job.get("site") or (_extract_domain(jlink) if jlink else ""))
+                _global_scraped_by_source[src] = _global_scraped_by_source.get(src, 0) + 1
+        else:
+            indices_to_remove.append(idx)
+            src = clean_source(job.get("source") or job.get("site") or (_extract_domain(jlink) if jlink else ""))
+            _global_scraped_by_source[src] = _global_scraped_by_source.get(src, 0) + 1
+            _global_failed_by_source[src] = _global_failed_by_source.get(src, 0) + 1
 
-                if not company_name:
-                    company_name = row.get("company_name") if (isinstance(row, dict) or hasattr(row, 'get')) else row[2]
-                if not job_name:
-                    job_name = row.get("job_name") if (isinstance(row, dict) or hasattr(row, 'get')) else row[1]
-                if not source:
-                    source = row.get("source") if (isinstance(row, dict) or hasattr(row, 'get')) else row[3]
-                if isinstance(row, dict) or hasattr(row, 'get'):
-                    job_date = row.get("date_added")
-                elif len(row) > 4:
-                    job_date = row[4]
-        except Exception as e:
-            print(f"Warning: failed to look up job in DB for link '{link}': {e}")
+    print(f"Post-processing description filter across {total_missing} in-memory job(s) lacking descriptions:")
+    if retained_from_db:
+        print(f"  - Retained {retained_from_db} job(s) with valid descriptions retrieved from DB.")
 
-        if has_existing_desc:
-            # Avoid marking existing jobs with valid descriptions as skipped
-            continue
-
-        log_entry = {
-            "id": db_id,
-            "job_name": job_name,
-            "company_name": company_name,
-            "source": source,
-            "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
-        }
-        skipped_jobs.append(log_entry)
-
-        if db_id is not None:
-            job_ids_to_skip.append(db_id)
-
-    if job_ids_to_skip:
-        try:
-            await _safe_db_call(dp.bulk_update_skip_status, job_ids_to_skip)
-            print(f"Set skip=True for {len(job_ids_to_skip)} job(s) in the database.")
-        except Exception as e:
-            print(f"Warning: failed to update skip status for jobs: {e}")
-
-    log_filename = f"skipped_jobs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    log_filepath = os.path.join("logs", "skipped", log_filename)
-    try:
-        os.makedirs(os.path.join("logs", "skipped"), exist_ok=True)
-        with open(log_filepath, "w", encoding="utf-8") as f:
-            json.dump(skipped_jobs, f, indent=2)
-        print(f"Logged {len(skipped_jobs)} skipped job(s) to {log_filepath}")
-    except Exception as e:
-        print(f"Warning: failed to write skip log file '{log_filepath}': {e}")
-
-    for idx in sorted(missing_description_indices, reverse=True):
+    for idx in sorted(indices_to_remove, reverse=True):
         results.pop(idx)
 
+    removed_count = len(indices_to_remove)
+    print(f"  - Removed {removed_count} job(s) lacking descriptions from the active processing pool.")
+    
+    # Print and log stats at the end of the operation
+    _print_and_log_stats()
+    
     return results
 
 
@@ -1197,17 +1362,24 @@ async def _pipeline_stage_scrape_legacy(
             try:
                 for i in scrape_jb(board, location, requests_wanted, 24, **kwa):
                     if isinstance(i, dict):
+                        pay_raw = (
+                            f"{i.get('min_amount', '')} - "
+                            f"{i.get('max_amount', '')} "
+                            f"{i.get('interval', '')}"
+                        ).strip()
+                        if not pay_raw or pay_raw == "-":
+                            pay_raw = i.get("pay_range") or i.get("pay") or i.get("pay_rate") or ""
+                        
+                        pay_parsed = parse_pay_range(pay_raw) if pay_raw else ""
+
                         job = {
                             "source": i.get("site"),
                             "title": i.get("title"),
                             "url": i.get("job_url"),
                             "link": i.get("job_url"),
                             "company": i.get("company"),
-                            "pay": (
-                                f"{i.get('min_amount', '')} - "
-                                f"{i.get('max_amount', '')} "
-                                f"{i.get('interval', '')}"
-                            ).strip(),
+                            "pay": pay_parsed,
+                            "pay_rate": pay_parsed,
                             "description": i.get("description"),
                             "city": i.get("city"),
                             "state": i.get("state"),
@@ -1222,6 +1394,7 @@ async def _pipeline_stage_scrape_legacy(
                             "link": None,
                             "company": None,
                             "pay": "",
+                            "pay_rate": "",
                             "description": None,
                             "city": None,
                             "state": None,
@@ -1254,9 +1427,8 @@ async def _pipeline_stage_scrape_legacy(
             jobs = []
 
     # ── Post-process: remove jobs without descriptions and log them ──
-    if not skip_db:
-        print("--- Post-processing: removing jobs without descriptions ---")
-        data = await _process_jobs_without_descriptions(data, dp)
-        jobs = await _process_jobs_without_descriptions(jobs, dp)
+    print("--- Post-processing: removing jobs without descriptions ---")
+    data = await _process_jobs_without_descriptions(data, dp)
+    jobs = await _process_jobs_without_descriptions(jobs, dp)
 
     return data + jobs

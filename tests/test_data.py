@@ -20,7 +20,7 @@ def make_dummy_setup_output() -> dict:
     return {
         "resume": "Experienced software engineer with 8 years in Python, Rust, and cloud infrastructure.",
         "user_profile": "Senior Python developer seeking remote roles in AI/ML and backend engineering.",
-        "skills": ["Python", "Rust", "Kubernetes", "Docker", "PostgreSQL", "FastAPI", "AWS", "Machine Learning"],
+        "requirements": ["Python", "Rust", "Kubernetes", "Docker", "PostgreSQL", "FastAPI", "AWS", "Machine Learning"],
         "job_titles": ["Senior Software Engineer", "Backend Engineer", "ML Engineer", "Platform Engineer"],
         "db_config": {
             "dbname": os.getenv("DB_NAME", "test_jobs"),
@@ -127,7 +127,7 @@ def make_dummy_stage1_output(count: int = 10) -> List[Dict[str, Any]]:
             },
             "embeddings": {
                 "description_vector": None,
-                "skills_vector": None,
+                "requirements_vector": None,
             },
         })
     return jobs
@@ -142,12 +142,12 @@ def make_dummy_stage2_output(count: int = 10) -> List[Dict[str, Any]]:
     jobs = make_dummy_stage1_output(count)
     dummy_embedding = [0.01 * (idx + 1) for idx in range(384)]
     for i, j in enumerate(jobs):
-        j["features"]["skills"] = ["Python", "SQL", "Docker", "Kubernetes", "AWS"][:3 + (i % 3)]
-        j["features"]["requirements"] = ["5+ years experience", "BS in CS", "Strong communication"]
+        j["features"]["requirements"] = ["Python", "SQL", "Docker", "Kubernetes", "AWS"][:3 + (i % 3)]
+        j["features"]["responsibilities"] = ["5+ years experience", "BS in CS", "Strong communication"]
         j["features"]["summary"] = f"Job summary for {j['features']['title']}: a great role."
         j["embeddings"]["title_vector"] = dummy_embedding
-        j["embeddings"]["skills_vector"] = dummy_embedding
         j["embeddings"]["requirements_vector"] = dummy_embedding
+        j["embeddings"]["responsibilities_vector"] = dummy_embedding
         j["embeddings"]["description_vector"] = dummy_embedding
     return jobs
 
@@ -189,7 +189,7 @@ def make_dummy_stage5_output(count: int = 7) -> List[Dict[str, Any]]:
         j["semantic_score"] = score
         j["semantic_score_percent"] = int(round(score * 100))
         j["title_similarity"] = score * 0.9
-        j["skills_similarity"] = score * 0.85
+        j["requirements_similarity"] = score * 0.85
         j["responsibility_similarity"] = score * 0.8
         j["adjusted_score"] = score
         j["best_archetype"] = ["Resume", "User Profile", "Senior Backend", "ML Engineer"][i % 4]
@@ -203,7 +203,7 @@ def make_dummy_stage5_output(count: int = 7) -> List[Dict[str, Any]]:
             "archetype_name": j["best_archetype"],
             "score": score,
             "title_similarity": j["title_similarity"],
-            "skills_similarity": j["skills_similarity"],
+            "requirements_similarity": j["requirements_similarity"],
             "responsibility_similarity": j["responsibility_similarity"],
         }]
     return jobs
@@ -307,20 +307,20 @@ def get_dummy_data(stage: int, variant: str = "") -> Any:
 
 STAGE_INPUT_SHAPES = {
     0: "Setup config (env vars, file paths)",
-    1: "Setup output (resume, profile, skills, job_titles, db_config, user_preferences)",
+    1: "Setup output (resume, profile, requirements, job_titles, db_config, user_preferences)",
     2: "List[dict]: scraped jobs with features (title, description, pay, etc.)",
-    3: "List[dict]: jobs with embeddings + extracted skills/requirements/summary",
+    3: "List[dict]: jobs with embeddings + extracted requirements/responsibilities/summary",
     4: "List[dict]: jobs with skip flags after rule filtering",
     5: "List[dict]: active jobs (non-skipped) + loaded archetypes",
     6: "List[dict]: jobs with archetype scores + semantic scores",
     7: "List[dict]: jobs with cheap LLM results, shortlisted",
     8: "List[dict]: jobs with strong LLM results, deeply analyzed",
 }
-
+ 
 STAGE_OUTPUT_SHAPES = {
-    0: "dict: resume, user_profile, skills, job_titles, db_config, user_preferences",
+    0: "dict: resume, user_profile, requirements, job_titles, db_config, user_preferences",
     1: "List[dict]: scraped jobs with id, title, company, description, pay, etc.",
-    2: "List[dict]: jobs with features, embeddings (title/skills/requirements vectors)",
+    2: "List[dict]: jobs with features, embeddings (title/requirements/responsibilities vectors)",
     3: "List[dict]: jobs with skip=bool + DB sync'd skip status",
     4: "List[dict]: active jobs (non-skipped), archetype manager loaded",
     5: "List[dict]: jobs with semantic_score, archetype_matches, retrieval_metadata. filtered_pool saved to DB.",

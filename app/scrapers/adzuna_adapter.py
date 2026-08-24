@@ -9,6 +9,7 @@ import logging
 from furl import furl
 from typing import Any, Dict, List
 from app.scrapers import ScraperAdapter
+from app.prompt_injection_defender import sanitize_untrusted_text
 
 load_dotenv()
 
@@ -208,9 +209,13 @@ class AdzunaAdapter(ScraperAdapter):
             else:
                 pay_range = ""
 
+            raw_title = job.get('title', '')
+            sanitized_title = sanitize_untrusted_text(raw_title)
+
             new_job = {
-                'title': job.get('title', ''),
-                'job_name': job.get('title', ''),
+                'title': sanitized_title,
+                'job_name': sanitized_title,
+                'description': "",  # Left empty so fallback page scraper fetches full job description page
                 'company': job.get('company', {}).get('display_name', ''),
                 'company_name': job.get('company', {}).get('display_name', ''),
                 'pay': pay_range,
@@ -229,48 +234,105 @@ class AdzunaAdapter(ScraperAdapter):
     # API Requests
     # ================================================================================ #
 
-    async def pull_jobs(self, page: int = 1, search: dict = {}):
+    DEFAULT_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Ensure an active aiohttp session with standard headers and timeout."""
+        if self.session is None or self.session.closed:
+            timeout = aiohttp.ClientTimeout(total=60, connect=15)
+            self.session = aiohttp.ClientSession(headers=self.DEFAULT_HEADERS, timeout=timeout)
+        return self.session
+
+    async def pull_jobs(self, page: int = 1, search: dict = {}, max_retries: int = 3, base_delay: float = 2.0):
+        """
+        Pull jobs from Adzuna with retry logic and exponential backoff.
+        Handles transient 503, 502, 504, 429 errors and non-JSON responses gracefully.
+        """
         url = self.adzuna_api_adapter(page, **search)
-        session = self.session
-        session_created = False
+        session = await self._get_session()
+        title = search.get("title_only") or search.get("what") or "all"
 
-        if session is None:
-            session = aiohttp.ClientSession()
-            self.session = session
-            session_created = True
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with session.get(str(url)) as response:
+                    status = response.status
+                    if status == 200:
+                        try:
+                            data = await response.json()
+                            processed = self.process_data(data)
+                            return data.get('count', 0), processed
+                        except Exception as json_err:
+                            text = await response.text()
+                            self.logger.warning(
+                                f"[Adzuna] Failed to decode JSON for '{title}' (attempt {attempt}/{max_retries}): {json_err} | Body: {text[:200]}"
+                            )
+                    elif status in (429, 500, 502, 503, 504):
+                        text = await response.text()
+                        delay = base_delay * (2 ** (attempt - 1))
+                        self.logger.warning(
+                            f"[Adzuna] HTTP {status} for '{title}' (attempt {attempt}/{max_retries}). Retrying in {delay:.1f}s... | Response: {text[:150]}"
+                        )
+                        if attempt < max_retries:
+                            await asyncio.sleep(delay)
+                            continue
+                        else:
+                            error_logger_continue(f"[Adzuna] HTTP {status} for '{title}' after {max_retries} retries: {text[:200]}")
+                            return 0, []
+                    else:
+                        text = await response.text()
+                        error_logger_continue(f"[Adzuna] HTTP {status} unrecoverable error for '{title}': {text[:200]}")
+                        return 0, []
+            except (aiohttp.ClientError, asyncio.TimeoutError) as net_err:
+                delay = base_delay * (2 ** (attempt - 1))
+                self.logger.warning(
+                    f"[Adzuna] Network error for '{title}' (attempt {attempt}/{max_retries}): {net_err}. Retrying in {delay:.1f}s..."
+                )
+                if attempt < max_retries:
+                    await asyncio.sleep(delay)
+                else:
+                    error_logger_continue(f"[Adzuna] Network error for '{title}' after {max_retries} retries: {net_err}")
+                    return 0, []
+            except Exception as e:
+                error_logger_continue(f"[Adzuna] Unexpected error pulling jobs for '{title}': {e}")
+                return 0, []
 
-        try:
-            async with session.get(str(url)) as response:
-                data = await response.json()
-                processed = self.process_data(data)
-                return data['count'], processed
-        finally:
-            if session_created and self.session:
-                await self.session.close()
-                self.session = None
+        return 0, []
 
     async def full_run(self, searches_csv: str = ""):
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
+        """
+        Execute all searches defined in the searches CSV.
+        Isolates errors per-search so one failing search does not abort the rest.
+        """
+        session = await self._get_session()
+        all_jobs = []
         try:
-            all_jobs = []
             searches = self.pull_searches(searches_csv)
             for search in searches:
+                search_title = search.get("title_only") or search.get("what") or "unnamed"
                 page = 1
-                while True:
-                    count, job = await self.pull_jobs(page, search)
-                    if search.get('rpp') and search['rpp'] * page < count:
-                        page += 1
-                        all_jobs.append(job)
-                    else:
-                        all_jobs.append(job)
-                        break
+                try:
+                    while True:
+                        count, jobs = await self.pull_jobs(page, search)
+                        if jobs:
+                            all_jobs.append(jobs)
+                        if search.get('rpp') and count > 0 and search['rpp'] * page < count:
+                            page += 1
+                        else:
+                            break
+                except Exception as search_err:
+                    error_logger_continue(f"[Adzuna] Error during search '{search_title}': {search_err}")
             return all_jobs
         except Exception as e:
-            error_logger_crash(f"Error pulling Adzuna data: {e}")
+            error_logger_continue(f"Error pulling Adzuna data: {e}")
+            return all_jobs
         finally:
-            if self.session:
+            if self.session and not self.session.closed:
                 await self.session.close()
+                self.session = None
 
     async def scrape(self) -> List[Dict[str, Any]]:
         jobs = await self.full_run() or []

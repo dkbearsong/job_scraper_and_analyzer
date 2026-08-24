@@ -179,8 +179,26 @@ class JobSpyAdapter(ScraperAdapter):
         min_amount = raw.get("min_amount", "")
         max_amount = raw.get("max_amount", "")
         interval = raw.get("interval", "")
-        pay_parts = [str(min_amount) if min_amount else "", str(max_amount) if max_amount else "", str(interval) if interval else ""]
-        pay = " - ".join(p.strip() for p in pay_parts[:2] if p.strip())
+        
+        if str(interval).lower() == "yearly":
+            def _fmt_yearly(v):
+                if not v:
+                    return ""
+                try:
+                    val = float(v)
+                    if val >= 1000 and val % 1000 == 0:
+                        return str(int(val // 1000))
+                except (ValueError, TypeError):
+                    pass
+                return str(v).strip()
+            min_str = _fmt_yearly(min_amount)
+            max_str = _fmt_yearly(max_amount)
+        else:
+            min_str = str(min_amount).strip() if min_amount else ""
+            max_str = str(max_amount).strip() if max_amount else ""
+
+        pay_parts = [min_str, max_str]
+        pay = " - ".join(p for p in pay_parts if p)
         if interval and pay:
             pay = f"{pay} {interval}".strip()
 

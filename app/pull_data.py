@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from random import random
 from datetime import date
 from collections import defaultdict
+from typing import Optional
 
 # Modules
 from app.postgres_mgr import PostgresManager
@@ -32,10 +33,76 @@ class DataPuller:
         
         # Check and run automatic schema migration if columns don't exist
         try:
-            self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS skills JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS requirements JSONB", dbname=self.dbname)
             self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS responsibilities JSONB", dbname=self.dbname)
             self.conn.execute_sql("ALTER TABLE job ADD COLUMN IF NOT EXISTS description TEXT", dbname=self.dbname)
             
+            # Create indexes on job columns and results tables for fast join execution
+            self.conn.execute_sql("CREATE INDEX IF NOT EXISTS idx_job_company_id ON job(company_id)", dbname=self.dbname)
+            self.conn.execute_sql("CREATE INDEX IF NOT EXISTS idx_job_office_id ON job(office_id)", dbname=self.dbname)
+            self.conn.execute_sql("CREATE INDEX IF NOT EXISTS idx_job_embeddings_job_id ON job_embeddings(job_id)", dbname=self.dbname)
+            
+            # Make sure results tables exist and have indexes
+            self.conn.execute_sql("""
+            CREATE TABLE IF NOT EXISTS cheap_llm_results (
+                id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                fit_score INTEGER,
+                decision VARCHAR(20),
+                strengths JSONB,
+                concerns JSONB,
+                hard_requirements_and_tools JSONB,
+                core_responsibilities JSONB,
+                years_of_experience JSONB,
+                domain_and_education JSONB,
+                raw_response JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""", dbname=self.dbname)
+            self.conn.execute_sql("CREATE INDEX IF NOT EXISTS idx_cheap_llm_results_job_id ON cheap_llm_results(job_id)", dbname=self.dbname)
+            
+            self.conn.execute_sql("""
+            CREATE TABLE IF NOT EXISTS strong_llm_results (
+                id SERIAL PRIMARY KEY,
+                job_id INTEGER NOT NULL,
+                final_score INTEGER,
+                priority VARCHAR(20),
+                apply_recommendation VARCHAR(20),
+                red_flags JSONB,
+                tailoring_notes JSONB,
+                recruiter_bait_likelihood VARCHAR(20),
+                detailed_fit_analysis TEXT,
+                company_scale_fit JSONB,
+                career_trajectory JSONB,
+                seniority_scope_calibration JSONB,
+                hero_story_match JSONB,
+                project_complexity JSONB,
+                shadow_work_friction JSONB,
+                domain_business_model_friction JSONB,
+                recruiter_red_flags JSONB,
+                driving_points JSONB,
+                raw_response JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""", dbname=self.dbname)
+            self.conn.execute_sql("CREATE INDEX IF NOT EXISTS idx_strong_llm_results_job_id ON strong_llm_results(job_id)", dbname=self.dbname)
+ 
+            # Ensure new columns exist on existing databases
+            self.conn.execute_sql("ALTER TABLE cheap_llm_results ADD COLUMN IF NOT EXISTS hard_requirements_and_tools JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE cheap_llm_results ADD COLUMN IF NOT EXISTS core_responsibilities JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE cheap_llm_results ADD COLUMN IF NOT EXISTS years_of_experience JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE cheap_llm_results ADD COLUMN IF NOT EXISTS domain_and_education JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE cheap_llm_results ADD COLUMN IF NOT EXISTS raw_response JSONB", dbname=self.dbname)
+
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS company_scale_fit JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS career_trajectory JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS seniority_scope_calibration JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS hero_story_match JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS project_complexity JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS shadow_work_friction JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS domain_business_model_friction JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS recruiter_red_flags JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS driving_points JSONB", dbname=self.dbname)
+            self.conn.execute_sql("ALTER TABLE strong_llm_results ADD COLUMN IF NOT EXISTS raw_response JSONB", dbname=self.dbname)
+
             create_token_usage_sql = """
             CREATE TABLE IF NOT EXISTS token_usage_log (
                 id SERIAL PRIMARY KEY,
@@ -267,6 +334,9 @@ class DataPuller:
             ]
         '''
         
+        inserted_count = 0
+        matched_existing_count = 0
+
         for item in data:
             # Get or insert company
             companies = self.conn.search("company", {"company_name": item['company']})
@@ -299,44 +369,50 @@ class DataPuller:
                 else:
                     continue
 
+            job_title = item.get('title') or item.get('job_name') or ""
+            job_link = item.get('url') or item.get('link') or ""
+
             # Check for duplicate job within 3 months
             query = """
             SELECT * FROM job 
             WHERE job_name = %s AND company_id = %s AND office_id = %s 
             AND date_added >= CURRENT_DATE - INTERVAL '3 months'
             """
-            rows = self.conn.execute_sql(query, (item['title'], company_id, office_id), fetch=True)
+            rows = self.conn.execute_sql(query, (job_title, company_id, office_id), fetch=True)
             if rows:
                 # Get the ID of the existing duplicate job
                 existing_row = rows[0]
-                existing_id = existing_row.get("id") if isinstance(existing_row, dict) else existing_row[0]
+                existing_id = existing_row.get("id") if (isinstance(existing_row, dict) or hasattr(existing_row, 'get')) else existing_row[0]
                 item['id'] = existing_id
+                matched_existing_count += 1
                 continue  # Skip duplicate but assign ID
             
-            # print(f"item source: {item['source']}")
-
             # Insert job
             insert_data = {
-                "job_name": item['title'],
+                "job_name": job_title,
                 "company_id": company_id,
                 "office_id": office_id,
-                "link": item['url'],
+                "link": job_link,
                 "date_added": date.today(),
-                "flexibility": item['flexibility'],
-                "source":item['source']
+                "flexibility": item.get('flexibility'),
+                "source": item.get('source') or item.get('site')
             }
             
             if item.get('description'):
                 insert_data['job_summary'] = item['description']
 
-            if 'pay' in item:
-                insert_data['pay_range'] = item['pay']
+            pay_val = item.get('pay_rate') or item.get('pay')
+            if pay_val:
+                insert_data['pay_range'] = pay_val
 
             job_res = self.conn.insert("job", insert_data, returning=["id"])
-            if job_res and isinstance(job_res, (list, tuple)) and len(job_res) > 0 and len(job_res[0]) > 0:
-                item['id'] = job_res[0][0]
+            if job_res:
+                new_id = job_res[0].get('id') if (isinstance(job_res[0], dict) or hasattr(job_res[0], 'get')) else job_res[0][0]
+                item['id'] = new_id
+                inserted_count += 1
 
-        return
+        print(f"Loaded {len(data)} scraped job(s) into Database: {inserted_count} new job(s) inserted, {matched_existing_count} existing job(s) matched & retained (deduplicated to prevent duplicate entries).")
+        return (inserted_count, matched_existing_count)
 
     def pull_data_db(self, query: str): # Need to modify this so it returns as a dict. Check 
         '''
@@ -382,9 +458,10 @@ class DataPuller:
             # Only update fields if they don't already exist (not None/empty)
             set_values = {}
             
-            # Check pay_range
-            if update_data.get('pay_range') is not None and update_data['pay_range'] != "":
-                set_values["pay_range"] = update_data.get('pay_range')
+            # Check pay_range/pay_rate
+            pay_val = update_data.get('pay_range') or update_data.get('pay_rate') or update_data.get('pay')
+            if pay_val is not None and pay_val != "":
+                set_values["pay_range"] = pay_val
                 
             # Check seniority
             if update_data.get('seniority') is not None and update_data['seniority'] != "":
@@ -402,11 +479,11 @@ class DataPuller:
             # Check description (which holds LLM summary)
             if update_data.get('description') is not None and update_data['description'] != "":
                 set_values["description"] = update_data.get('description')
-
-            # Check skills (store list as JSON string)
-            if update_data.get('skills') is not None:
-                set_values["skills"] = json.dumps(update_data.get('skills'))
-
+ 
+            # Check requirements (store list as JSON string)
+            if update_data.get('requirements') is not None:
+                set_values["requirements"] = json.dumps(update_data.get('requirements'))
+ 
             # Check responsibilities (store list as JSON string)
             if update_data.get('responsibilities') is not None:
                 set_values["responsibilities"] = json.dumps(update_data.get('responsibilities'))
@@ -435,27 +512,31 @@ class DataPuller:
             insert_data = {
                 "job_id": job_id,
                 "title_embedding": data.get("title_embedding"),
-                "skills_embedding": data.get("skills_embedding"),
+                "requirements_embedding": data.get("requirements_embedding"),
                 "responsibilities_embedding": data.get("responsibilities_embedding"),
                 "description_embedding": data.get("description_embedding")
             }
-
+ 
             # Use raw SQL with ON CONFLICT to handle duplicate job_ids
             upsert_sql = """
-                INSERT INTO job_embeddings (job_id, title_embedding, skills_embedding, responsibilities_embedding, description_embedding)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO job_embeddings (job_id, title_embedding, requirements_embedding, responsibilities_embedding, description_embedding, pay_embedding, location_embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (job_id) DO UPDATE SET
                     title_embedding = COALESCE(EXCLUDED.title_embedding, job_embeddings.title_embedding),
-                    skills_embedding = COALESCE(EXCLUDED.skills_embedding, job_embeddings.skills_embedding),
+                    requirements_embedding = COALESCE(EXCLUDED.requirements_embedding, job_embeddings.requirements_embedding),
                     responsibilities_embedding = COALESCE(EXCLUDED.responsibilities_embedding, job_embeddings.responsibilities_embedding),
-                    description_embedding = COALESCE(EXCLUDED.description_embedding, job_embeddings.description_embedding)
+                    description_embedding = COALESCE(EXCLUDED.description_embedding, job_embeddings.description_embedding),
+                    pay_embedding = COALESCE(EXCLUDED.pay_embedding, job_embeddings.pay_embedding),
+                    location_embedding = COALESCE(EXCLUDED.location_embedding, job_embeddings.location_embedding)
             """
             self.conn.execute_sql(upsert_sql, params=(
                 job_id,
                 data.get("title_embedding"),
-                data.get("skills_embedding"),
+                data.get("requirements_embedding"),
                 data.get("responsibilities_embedding"),
-                data.get("description_embedding")
+                data.get("description_embedding"),
+                data.get("pay_embedding"),
+                data.get("location_embedding")
             ), dbname=self.dbname)
 
     def bulk_create_table(self, create_sql: str, table_name: str = ""):
@@ -470,11 +551,11 @@ class DataPuller:
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS vector_scores (
             id SERIAL PRIMARY KEY,
-            job_id INTEGER NOT NULL,
+            job_id INTEGER NOT NULL UNIQUE,
             archetype_name VARCHAR(255) NOT NULL,
             semantic_score REAL,
             title_similarity REAL,
-            skills_similarity REAL,
+            requirements_similarity REAL,
             responsibility_similarity REAL,
             adjusted_score REAL,
             rank INTEGER,
@@ -486,20 +567,28 @@ class DataPuller:
         CREATE INDEX IF NOT EXISTS idx_vs_job_id ON vector_scores(job_id)
         """
         self.bulk_create_table(create_index_sql, "idx_vs_job_id")
-
+ 
         for rank, job in enumerate(filtered_job_pool, start=1):
+            job_id = job['metadata']['job_id']
+            # Check if job_id already exists in vector_scores
+            check_sql = "SELECT 1 FROM vector_scores WHERE job_id = %s"
+            exists = self.conn.execute_sql(check_sql, params=(job_id,), fetch=True)
+            if exists:
+                print(f"Failsafe: Job ID {job_id} already exists in vector_scores. Skipping insert.")
+                continue
+
             insert_sql = """
                 INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
-                                           title_similarity, skills_similarity,
+                                           title_similarity, requirements_similarity,
                                            responsibility_similarity, adjusted_score, rank)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """
             self.conn.execute_sql(insert_sql, params=(
-                job['metadata']['job_id'],
+                job_id,
                 job.get('best_archetype', ''),
                 job.get('semantic_score', 0),
                 job.get('title_similarity', 0),
-                job.get('skills_similarity', 0),
+                job.get('requirements_similarity', 0),
                 job.get('responsibility_similarity', 0),
                 job.get('adjusted_score', 0),
                 rank
@@ -535,23 +624,37 @@ class DataPuller:
             decision VARCHAR(20),
             strengths JSONB,
             concerns JSONB,
+            hard_requirements_and_tools JSONB,
+            core_responsibilities JSONB,
+            years_of_experience JSONB,
+            domain_and_education JSONB,
+            raw_response JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
         self.bulk_create_table(create_table_sql, "cheap_llm_results")
-
+ 
         for job in shortlisted_jobs:
             cheap_result = job.get('cheap_llm_result', {})
             insert_sql = """
-                INSERT INTO cheap_llm_results (job_id, fit_score, decision, strengths, concerns)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO cheap_llm_results (
+                    job_id, fit_score, decision, strengths, concerns,
+                    hard_requirements_and_tools, core_responsibilities, 
+                    years_of_experience, domain_and_education, raw_response
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             self.conn.execute_sql(insert_sql, params=(
                 job['metadata']['job_id'],
                 cheap_result.get('fit_score', 50),
                 cheap_result.get('decision', 'maybe'),
                 json.dumps(cheap_result.get('strengths', [])),
-                json.dumps(cheap_result.get('concerns', []))
+                json.dumps(cheap_result.get('concerns', [])),
+                json.dumps(cheap_result.get('hard_requirements_and_tools', [])),
+                json.dumps(cheap_result.get('core_responsibilities', [])),
+                json.dumps(cheap_result.get('years_of_experience', {})),
+                json.dumps(cheap_result.get('domain_and_education', {})),
+                json.dumps(cheap_result.get('raw_response', {}))
             ), dbname=self.dbname)
 
     def save_strong_llm_results(self, deeply_analyzed_jobs: list):
@@ -567,6 +670,16 @@ class DataPuller:
             tailoring_notes JSONB,
             recruiter_bait_likelihood VARCHAR(20),
             detailed_fit_analysis TEXT,
+            company_scale_fit JSONB,
+            career_trajectory JSONB,
+            seniority_scope_calibration JSONB,
+            hero_story_match JSONB,
+            project_complexity JSONB,
+            shadow_work_friction JSONB,
+            domain_business_model_friction JSONB,
+            recruiter_red_flags JSONB,
+            driving_points JSONB,
+            raw_response JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -574,22 +687,43 @@ class DataPuller:
 
         for job in deeply_analyzed_jobs:
             strong_result = job.get('strong_llm_result', {})
+            
+            # Map recruiter_red_flags.flag_details list to legacy red_flags column for backward compatibility
+            recruiter_flags = strong_result.get('recruiter_red_flags', {})
+            legacy_flags = recruiter_flags.get('flag_details', []) if isinstance(recruiter_flags, dict) else []
+
             insert_sql = """
-                INSERT INTO strong_llm_results (job_id, final_score, priority,
-                                               apply_recommendation, red_flags,
-                                               tailoring_notes, recruiter_bait_likelihood,
-                                               detailed_fit_analysis)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO strong_llm_results (
+                    job_id, final_score, priority,
+                    apply_recommendation, red_flags,
+                    tailoring_notes, recruiter_bait_likelihood,
+                    detailed_fit_analysis, company_scale_fit,
+                    career_trajectory, seniority_scope_calibration,
+                    hero_story_match, project_complexity,
+                    shadow_work_friction, domain_business_model_friction,
+                    recruiter_red_flags, driving_points, raw_response
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             self.conn.execute_sql(insert_sql, params=(
                 job['metadata']['job_id'],
                 strong_result.get('final_score', 50),
                 strong_result.get('priority', 'medium'),
                 strong_result.get('apply_recommendation', 'maybe'),
-                json.dumps(strong_result.get('red_flags', [])),
+                json.dumps(legacy_flags),
                 json.dumps(strong_result.get('tailoring_notes', [])),
                 strong_result.get('recruiter_bait_likelihood', 'medium'),
-                strong_result.get('detailed_fit_analysis', '')
+                strong_result.get('detailed_fit_analysis', ''),
+                json.dumps(strong_result.get('company_scale_fit', {})),
+                json.dumps(strong_result.get('career_trajectory', {})),
+                json.dumps(strong_result.get('seniority_scope_calibration', {})),
+                json.dumps(strong_result.get('hero_story_match', {})),
+                json.dumps(strong_result.get('project_complexity', {})),
+                json.dumps(strong_result.get('shadow_work_friction', {})),
+                json.dumps(strong_result.get('domain_business_model_friction', {})),
+                json.dumps(recruiter_flags),
+                json.dumps(strong_result.get('driving_points', [])),
+                json.dumps(strong_result.get('raw_response', {}))
             ), dbname=self.dbname)
 
     def save_final_queue(self, final_queue: list):
@@ -629,24 +763,24 @@ class DataPuller:
 
     def get_archetype_embeddings(self, name: str):
         """Retrieves cached archetype embeddings from the database."""
-        query = "SELECT title_embedding, skills_embedding, responsibilities_embedding, archetype_type, metadata, date_generated FROM archetype_embeddings WHERE archetype_name = %s"
+        query = "SELECT title_embedding, requirements_embedding, responsibilities_embedding, archetype_type, metadata, date_generated FROM archetype_embeddings WHERE archetype_name = %s"
         rows = self.conn.execute_sql(query, (name,), fetch=True)
         if rows:
             # Convert row back to a clean dictionary
             res = dict(rows[0])
             return res
         return None
-
+ 
     def save_archetype_embeddings(self, archetype_data: dict):
         """Caches newly generated archetype embeddings, updating if they already exist."""
         insert_sql = """
             INSERT INTO archetype_embeddings (archetype_name, archetype_type, title_embedding,
-                                              skills_embedding, responsibilities_embedding, metadata)
+                                              requirements_embedding, responsibilities_embedding, metadata)
             VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (archetype_name) DO UPDATE SET
                 archetype_type = EXCLUDED.archetype_type,
                 title_embedding = EXCLUDED.title_embedding,
-                skills_embedding = EXCLUDED.skills_embedding,
+                requirements_embedding = EXCLUDED.requirements_embedding,
                 responsibilities_embedding = EXCLUDED.responsibilities_embedding,
                 metadata = EXCLUDED.metadata,
                 date_generated = CURRENT_TIMESTAMP
@@ -655,10 +789,121 @@ class DataPuller:
             archetype_data['archetype_name'],
             archetype_data['archetype_type'],
             archetype_data['title_embedding'],
-            archetype_data['skills_embedding'],
+            archetype_data['requirements_embedding'],
             archetype_data['responsibilities_embedding'],
             archetype_data['metadata']
         ), dbname=self.dbname)
+
+    def get_cached_job_features(self, description: str) -> Optional[dict]:
+        """
+        Looks up existing extractions and embeddings in DB for an identical job description.
+        Returns a dict of features and embeddings if found, else None.
+        """
+        if not description or len(description.strip()) < 50:
+            return None
+        try:
+            query = """
+                SELECT j.requirements, j.responsibilities, j.description AS summary, j.pay_range, j.work_type, j.seniority,
+                       je.title_embedding, je.requirements_embedding, je.responsibilities_embedding, je.description_embedding,
+                       je.pay_embedding, je.location_embedding
+                FROM job j
+                LEFT JOIN job_embeddings je ON j.id = je.job_id
+                WHERE (j.job_summary = %s OR j.description = %s)
+                  AND j.requirements IS NOT NULL
+                  AND j.responsibilities IS NOT NULL
+                LIMIT 1
+            """
+            rows = self.conn.execute_sql(query, (description, description), fetch=True)
+            if rows:
+                r = rows[0]
+                if isinstance(r, dict):
+                    reqs = r.get("requirements")
+                    resps = r.get("responsibilities")
+                    summ = r.get("summary")
+                    pay = r.get("pay_range")
+                    wt = r.get("work_type")
+                    sen = r.get("seniority")
+                    t_emb = r.get("title_embedding")
+                    req_emb = r.get("requirements_embedding")
+                    resp_emb = r.get("responsibilities_embedding")
+                    desc_emb = r.get("description_embedding")
+                    pay_emb = r.get("pay_embedding")
+                    loc_emb = r.get("location_embedding")
+                else:
+                    reqs, resps, summ, pay, wt, sen, t_emb, req_emb, resp_emb, desc_emb, pay_emb, loc_emb = r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11]
+                
+                return {
+                    "features": {
+                        "requirements": reqs,
+                        "responsibilities": resps,
+                        "summary": summ,
+                        "pay": pay,
+                        "work_type": wt,
+                        "seniority": sen,
+                    },
+                    "embeddings": {
+                        "title_vector": t_emb,
+                        "requirements_vector": req_emb,
+                        "responsibilities_vector": resp_emb,
+                        "description_vector": desc_emb,
+                        "pay_vector": pay_emb,
+                        "location_vector": loc_emb,
+                    }
+                }
+        except Exception:
+            pass
+        return None
+
+    def clear_jobs_for_reprocessing(self, days: int) -> int:
+        """
+        Clears extractions, embeddings, vector scores, cheap LLM results, strong LLM results,
+        and final queue entries for jobs added in the last `days` days. Resets skip status to FALSE
+        so jobs can be reprocessed through pipeline stages.
+        """
+        if days <= 0:
+            return 0
+
+        print(f"[DataPuller] Finding jobs added in the last {days} day(s)...")
+        find_query = "SELECT id FROM job WHERE date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;"
+        rows = self.conn.execute_sql(find_query, (days,), fetch=True)
+        if not rows:
+            print(f"[DataPuller] No jobs found added in the last {days} day(s).")
+            return 0
+
+        job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+        print(f"[DataPuller] Found {len(job_ids)} jobs added in the last {days} day(s) to clear for reprocessing.")
+
+        id_list = list(job_ids)
+
+        # 1. Clear job_embeddings
+        self.conn.execute_sql("DELETE FROM job_embeddings WHERE job_id = ANY(%s);", (id_list,))
+        # 2. Clear vector_scores
+        self.conn.execute_sql("DELETE FROM vector_scores WHERE job_id = ANY(%s);", (id_list,))
+        # 3. Clear cheap_llm_results
+        self.conn.execute_sql("DELETE FROM cheap_llm_results WHERE job_id = ANY(%s);", (id_list,))
+        # 4. Clear strong_llm_results
+        self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
+        # 5. Clear final_application_queue
+        self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+
+        # 6. Reset columns in job table so extractions & rule filtering are re-evaluated
+        reset_query = """
+            UPDATE job
+            SET skip = FALSE,
+                requirements = NULL,
+                responsibilities = NULL,
+                job_summary = NULL,
+                skills_to_work_on = NULL,
+                my_title_score = NULL,
+                my_summary_score = NULL,
+                title_rating = NULL,
+                summary_rating = NULL,
+                jsr_reasoning = NULL
+            WHERE id = ANY(%s);
+        """
+        self.conn.execute_sql(reset_query, (id_list,))
+        print(f"[DataPuller] Successfully cleared extractions, embeddings, vector scores, and LLM results for {len(job_ids)} job(s).")
+        return len(job_ids)
 
 
 def main():

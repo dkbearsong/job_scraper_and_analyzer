@@ -31,23 +31,23 @@ METADATA_ADJUSTMENTS = _load_env_json(
 )
 
 
-def apply_keyword_adjustments(base_score: float, skills_list: List[str], title: str) -> float:
+def apply_keyword_adjustments(base_score: float, requirements_list: List[str], title: str) -> float:
     """
     Apply keyword-based bonuses and penalties to a semantic score.
-    Case-insensitive matching against skills list and job title.
+    Case-insensitive matching against requirements list and job title.
     """
     score = base_score
-    skills_lower = [s.lower() for s in skills_list]
+    requirements_lower = [r.lower() for r in requirements_list]
     title_lower = title.lower()
     
     # Apply preferred bonuses
     for kw, delta in KEYWORD_ADJUSTMENTS["preferred"].items():
-        if kw in skills_lower or kw in title_lower:
+        if kw in requirements_lower or kw in title_lower:
             score += delta
             
     # Apply penalty deductions
     for kw, delta in KEYWORD_ADJUSTMENTS["penalty"].items():
-        if kw in skills_lower or kw in title_lower:
+        if kw in requirements_lower or kw in title_lower:
             score += delta
             
     return score

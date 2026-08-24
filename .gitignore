@@ -10,13 +10,15 @@ test_llm_classifier.py
 # Folders
 __pycache__/
 .pytest_cache/
-app/__pycache__/
-tests/__pycache__/
-archetype_profiles/
 .venv/
+app/__pycache__/
+archetype_profiles/
+docs/
 documents/
-output/
+logs/
 job_page_strategy/
+output/
+scratch/
 site_strategies/
 tests/
-logs/
+tests/__pycache__/

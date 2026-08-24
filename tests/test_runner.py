@@ -93,7 +93,7 @@ STAGE_NAMES = {
 
 STAGE_INPUT_DESC = {
     0: "None (uses env vars and files on disk)",
-    1: "Setup output dict: resume, profile, skills, job_titles, db_config",
+    1: "Setup output dict: resume, profile, requirements, job_titles, db_config",
     2: "List[dict] of scraped jobs with features (title, description, pay)",
     3: "List[dict] of jobs with embeddings and LLM-extracted data",
     4: "List[dict] of jobs with skip flags + user_preferences",

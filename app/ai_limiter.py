@@ -32,7 +32,7 @@ class AILimiter:
             "paid": {"rpm": 200, "concurrency": 10}
         },
         "openrouter": {
-            "free": {"rpm": 10, "concurrency": 2},
+            "free": {"rpm": 20, "concurrency": 5},
             "paid": {"rpm": 120, "concurrency": 8}
         },
         "grok": {
@@ -48,12 +48,16 @@ class AILimiter:
             "paid": {"rpm": 120, "concurrency": 8}
         },
         "cohere": {
-            "free": {"rpm": 10, "concurrency": 2},
+            "free": {"rpm": 5, "concurrency": 1},
             "paid": {"rpm": 100, "concurrency": 8}
         },
         "huggingface": {
             "free": {"rpm": 10, "concurrency": 2},
             "paid": {"rpm": 120, "concurrency": 8}
+        },
+        "siliconflow": {
+            "free": {"rpm": 100, "concurrency": 4},
+            "paid": {"rpm": 1000, "concurrency": 20}
         },
         "lm_studio": {
             "free": {"rpm": 60, "concurrency": 1},  # Defaults to 1 (synchronous)
@@ -84,49 +88,131 @@ class AILimiter:
             tier = "free"
         
         # Load default limits for the provider
-        provider_limits = self.PROVIDER_LIMITS.get(self.provider_name, {
+        provider_defaults = self.PROVIDER_LIMITS.get(self.provider_name, {
             "free": {"rpm": 10, "concurrency": 2},
             "paid": {"rpm": 100, "concurrency": 8}
         })
         
-        limits = provider_limits.get(tier, provider_limits["free"])
+        tier_limits = dict(provider_defaults.get(tier, provider_defaults.get("free", {})))
         
-        rpm = limits.get("rpm", 10)
-        concurrency = limits.get("concurrency", 2)
-        
-        # LM Studio and Ollama option override in user_preferences.yaml
-        if self.provider_name in ("lm_studio", "ollama"):
-            pref_key = f"{self.provider_name}_limit"
-            if pref_key in user_config:
-                val = user_config[pref_key]
-                if isinstance(val, dict):
-                    rpm = val.get("rpm", rpm)
-                    concurrency = val.get("concurrency", concurrency)
-                elif isinstance(val, (int, float)):
-                    concurrency = int(val)
-                    rpm = 9999  # unlimited RPM if only concurrency integer specified
-            else:
-                # No override found; keep concurrency at default 1
+        def _apply_override(target: dict, source: Any):
+            if not isinstance(source, dict):
+                if isinstance(source, (int, float)):
+                    target["concurrency"] = int(source)
+                    target["rpm"] = 9999
+                    target["requests_per_minute"] = 9999
+                return
+
+            if self.provider_name in source and isinstance(source[self.provider_name], dict):
+                _apply_override(target, source[self.provider_name])
+                return
+
+            if tier in source and isinstance(source[tier], dict):
+                _apply_override(target, source[tier])
+                return
+
+            for k, v in source.items():
+                if k not in ("free", "paid", self.provider_name) and not isinstance(v, dict):
+                    target[k] = v
+
+        # 1. Check provider-level overrides in user_config
+        for root_key in ("stage_rate_limits", "rate_limits", "ai_rate_limits", "ai_limits"):
+            if root_key in user_config and isinstance(user_config[root_key], dict):
+                if self.provider_name in user_config[root_key]:
+                    _apply_override(tier_limits, user_config[root_key][self.provider_name])
+
+        pref_key = f"{self.provider_name}_limit"
+        if pref_key in user_config:
+            _apply_override(tier_limits, user_config[pref_key])
+
+        # 2. Check stage-level overrides in user_config (takes precedence over provider-level)
+        for root_key in ("stage_rate_limits", "rate_limits", "ai_rate_limits", "ai_limits"):
+            if root_key in user_config and isinstance(user_config[root_key], dict):
+                if self.stage_name in user_config[root_key]:
+                    _apply_override(tier_limits, user_config[root_key][self.stage_name])
+
+        stage_pref_key = f"{self.stage_name}_limit"
+        if stage_pref_key in user_config:
+            _apply_override(tier_limits, user_config[stage_pref_key])
+
+        if self.stage_name in user_config and isinstance(user_config[self.stage_name], dict):
+            _apply_override(tier_limits, user_config[self.stage_name])
+
+        # 3. Environment variable overrides (highest priority)
+        env_rpm = os.getenv(f"{self.stage_name.upper()}_REQUESTS_PER_MINUTE") or os.getenv(f"{self.stage_name.upper()}_RPM")
+        if env_rpm is not None:
+            try:
+                tier_limits["requests_per_minute"] = float(env_rpm)
+            except ValueError:
+                pass
+                
+        env_tpm = os.getenv(f"{self.stage_name.upper()}_TOKENS_PER_MINUTE") or os.getenv(f"{self.stage_name.upper()}_TPM")
+        if env_tpm is not None:
+            try:
+                tier_limits["tokens_per_minute"] = float(env_tpm)
+            except ValueError:
+                pass
+
+        env_conc = os.getenv(f"{self.stage_name.upper()}_CONCURRENCY")
+        if env_conc is not None:
+            try:
+                tier_limits["concurrency"] = int(env_conc)
+            except ValueError:
+                pass
+
+        # Resolve Requests Per Minute (RPM)
+        if "requests_per_minute" in tier_limits and tier_limits["requests_per_minute"] is not None:
+            rpm = float(tier_limits["requests_per_minute"])
+        elif "rpm" in tier_limits and tier_limits["rpm"] is not None:
+            rpm = float(tier_limits["rpm"])
+        else:
+            rpm = 10.0
+
+        # Resolve Tokens Per Minute (TPM) / Tokens Per Second (TPS)
+        tpm = 0.0
+        tps = 0.0
+        if "tokens_per_minute" in tier_limits and tier_limits["tokens_per_minute"] is not None:
+            tpm = float(tier_limits["tokens_per_minute"])
+            tps = tpm / 60.0 if tpm > 0 else 0.0
+        elif "tpm" in tier_limits and tier_limits["tpm"] is not None:
+            tpm = float(tier_limits["tpm"])
+            tps = tpm / 60.0 if tpm > 0 else 0.0
+        elif "tps" in tier_limits and tier_limits["tps"] is not None:
+            tps = float(tier_limits["tps"])
+            tpm = tps * 60.0
+
+        # Resolve Concurrency
+        concurrency = tier_limits.get("concurrency")
+        if concurrency is None:
+            if self.provider_name in ("lm_studio", "ollama"):
                 concurrency = 1
-                    
-        # Apply synchronous override if set
+            else:
+                concurrency = 2
+        else:
+            concurrency = int(concurrency)
+
+        # Apply synchronous mode override
         if is_synchronous:
             concurrency = 1
-            
+
         self.rpm = rpm
+        self.tpm = tpm
+        self.tps = tps
         self.concurrency = concurrency
         self.semaphore = asyncio.Semaphore(concurrency)
         self.delay = 60.0 / rpm if rpm > 0 else 0.0
+        self._original_delay = self.delay
+        self._throttled = False
         self.last_request_time = 0.0
         self.lock = asyncio.Lock()
-        
-        # Token Bucket (Tokens Per Second - TPS) limiting
-        tps = limits.get("tps", 0)
-        self.tps = tps
-        self.tokens = float(tps)
+
+        # Token Bucket (Tokens Per Second / Tokens Per Minute) limiting
+        self.max_tokens = max(self.tps, self.tpm) if self.tpm > 0 else self.tps
+        self.tokens = float(self.max_tokens)
         self.last_leak_time = time.time()
-        
-        print(f"[RateLimiter] Initialized for stage '{self.stage_name}' with provider '{self.provider_name}' (tier: {tier}, concurrency: {self.concurrency}, rpm: {self.rpm}, tps: {self.tps})")
+
+        tpm_str = f"{self.tpm:.0f}" if self.tpm > 0 else "unlimited"
+        print(f"[RateLimiter] Initialized for stage '{self.stage_name}' with provider '{self.provider_name}' (tier: {tier}, concurrency: {self.concurrency}, rpm: {self.rpm}, tpm: {tpm_str}, tps: {self.tps:.2f})")
 
     def _load_user_config(self) -> dict:
         prefs_path = os.getenv("USER_PREFERENCES_YAML", "user_preferences.yaml")
@@ -140,32 +226,170 @@ class AILimiter:
 
     async def wait(self, estimated_tokens: int = 0):
         """Enforces the rate limit (RPM and TPS/Token Bucket) by waiting if needed."""
+        sleep_time = 0.0
+        
         async with self.lock:
-            # 1. Enforce token rate limit (TPS)
+            # 1. Enforce token rate limit (TPS / TPM)
             if self.tps > 0 and estimated_tokens > 0:
                 now = time.time()
                 elapsed = now - self.last_leak_time
-                self.tokens = min(self.tps, self.tokens + elapsed * self.tps)
+                max_cap = getattr(self, "max_tokens", self.tps)
+                self.tokens = min(max_cap, self.tokens + elapsed * self.tps)
                 self.last_leak_time = now
 
                 if self.tokens < estimated_tokens:
                     needed_tokens = estimated_tokens - self.tokens
                     wait_time = needed_tokens / self.tps
-                    wait_time = min(wait_time, 60.0)
-                    print(f"[RateLimiter] TPS Limit reached for {self.provider_name}. Throttling request for {wait_time:.2f}s (Needed: {estimated_tokens}, Available: {self.tokens:.1f})")
-                    await asyncio.sleep(wait_time)
-                    # Refill again after sleeping
-                    now = time.time()
-                    elapsed = now - self.last_leak_time
-                    self.tokens = min(self.tps, self.tokens + elapsed * self.tps)
-                    self.last_leak_time = now
+                    sleep_time = max(sleep_time, min(wait_time, 60.0))
 
                 self.tokens = max(0.0, self.tokens - estimated_tokens)
 
             # 2. Enforce RPM limit
             now = time.time()
-            elapsed = now - self.last_request_time
-            if elapsed < self.delay:
-                sleep_time = self.delay - elapsed
+            if self.delay > 0:
+                elapsed = now - self.last_request_time
+                if elapsed < self.delay:
+                    rpm_sleep = self.delay - elapsed
+                    sleep_time = max(sleep_time, rpm_sleep)
+                self.last_request_time = max(now, self.last_request_time + self.delay)
+            else:
+                self.last_request_time = now
+
+        # Sleep outside the lock to prevent blocking/starving other tasks that are computing their rates
+        if sleep_time > 0:
+            if self.tps > 0 and estimated_tokens > 0 and sleep_time > 1.0:
+                tpm_str = f" (TPM: {self.tpm:.0f})" if getattr(self, "tpm", 0) > 0 else ""
+                print(f"[RateLimiter] Token limit reached for {self.provider_name}{tpm_str}. Throttling request for {sleep_time:.2f}s")
+            await asyncio.sleep(sleep_time)
+
+    async def execute(self, func, *args, est_tokens: int = 0, use_semaphore: bool = True, **kwargs):
+        """
+        Executes a function (which is typically run via run_in_thread) with rate limiting,
+        dynamic exponential backoff on 429 errors, and general exception retries (2 retries, 5s delay).
+        """
+        from app.ai_engine import RateLimitError
+        import random
+
+        backoff = 2.0  # start with 2 seconds backoff for rate limits
+        max_backoff = 60.0
+        rate_retries = 0
+        max_rate_retries = 6
+
+        general_retries = 0
+        max_general_retries = int(os.getenv("AI_MAX_RETRIES", "2"))
+        retry_delay = float(os.getenv("AI_RETRY_DELAY", "5.0"))
+
+        self.last_input_tokens = est_tokens
+        while True:
+            # 1. Wait for our rate limiter window
+            await self.wait(est_tokens)
+
+            try:
+                # 2. Acquire semaphore and run the task
+                if use_semaphore:
+                    async with self.semaphore:
+                        if asyncio.iscoroutinefunction(func):
+                            res = await func(*args, **kwargs)
+                        else:
+                            from app.ai_limiter import run_in_thread
+                            res = await run_in_thread(func, *args, **kwargs)
+                else:
+                    if asyncio.iscoroutinefunction(func):
+                        res = await func(*args, **kwargs)
+                    else:
+                        from app.ai_limiter import run_in_thread
+                        res = await run_in_thread(func, *args, **kwargs)
+                    
+                # If we succeeded, we can slowly recover our rate limit if it was throttled
+                async with self.lock:
+                    if self._throttled:
+                        # Settle on a slightly faster rate (decay the delay back towards default)
+                        old_delay = self.delay
+                        self.delay = max(self._original_delay, self.delay * 0.9)
+                        if self.delay == self._original_delay:
+                            self._throttled = False
+                        print(f"\n[RateLimiter] Request succeeded. Recovering rate limit delay from {old_delay:.2f}s to {self.delay:.2f}s")
+                
+                return res
+
+            except RateLimitError as e:
+                rate_retries += 1
+                print(f"\n[RateLimiter] [DEBUG] Rate limit error on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count for request: {est_tokens}")
+                if rate_retries > max_rate_retries:
+                    print(f"\n[RateLimiter] Maximum retries ({max_rate_retries}) reached for rate limit (Input tokens: {est_tokens}). Propagating error: {e}")
+                    raise
+
+                # Adjust the rate limit dynamically on the limiter to throttle future requests!
+                async with self.lock:
+                    if not hasattr(self, "_original_delay"):
+                        self._original_delay = self.delay
+                    self._throttled = True
+                    old_delay = self.delay
+                    # Settle on a slower rate: double the delay (halve the RPM)
+                    self.delay = max(1.0, self.delay * 2.0)
+                    print(f"\n[RateLimiter] 429 Rate Limit encountered. Adjusting rate limit delay from {old_delay:.2f}s to {self.delay:.2f}s (Throttle applied)")
+
+                # Sleep with exponential backoff + jitter
+                sleep_time = backoff + (random.random() * 0.5 * backoff)
+                print(f"\n[RateLimiter] Rate limit error: {e} (Input tokens: {est_tokens}). Retrying {rate_retries}/{max_rate_retries} in {sleep_time:.2f}s...")
                 await asyncio.sleep(sleep_time)
-            self.last_request_time = time.time()
+                backoff = min(max_backoff, backoff * 2.0)
+
+            except Exception as e:
+                general_retries += 1
+                print(f"\n[RateLimiter] [DEBUG] AI processing error on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count for request: {est_tokens}")
+                if general_retries > max_general_retries:
+                    print(f"\n[RateLimiter] Maximum retries ({max_general_retries}) reached for error: {e} (Input tokens: {est_tokens}). Propagating error.")
+                    raise
+                print(f"\n[RateLimiter] AI processing error: {e} (Input tokens: {est_tokens}). Retrying attempt {general_retries}/{max_general_retries} in {retry_delay:.1f}s...")
+                await asyncio.sleep(retry_delay)
+
+
+
+class ProgressTracker:
+    def __init__(self, total: int, prefix: str = "Processing"):
+        self.total = total
+        self.completed = 0
+        self.prefix = prefix
+        self.animation_task = None
+        self._lock = asyncio.Lock()
+
+    async def start(self):
+        if self.total > 0:
+            self.animation_task = asyncio.create_task(self._animate())
+        else:
+            self._print_progress(0, 3)
+            import sys
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    async def increment(self):
+        if self.total <= 0:
+            return
+        async with self._lock:
+            self.completed = min(self.total, self.completed + 1)
+
+    async def _animate(self):
+        dot_count = 0
+        try:
+            while self.completed < self.total:
+                dot_count = (dot_count + 1) % 4
+                self._print_progress(self.completed, dot_count)
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._print_progress(self.completed, 3)
+            import sys
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+
+    def _print_progress(self, completed: int, dot_count: int):
+        import sys
+        dots = "." * dot_count + " " * (3 - dot_count)
+        sys.stdout.write(f"\r{self.prefix}: {completed}/{self.total} jobs{dots}")
+        sys.stdout.flush()
+
+    def stop(self):
+        if self.animation_task and not self.animation_task.done():
+            self.animation_task.cancel()
