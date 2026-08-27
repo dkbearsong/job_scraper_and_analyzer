@@ -17,6 +17,7 @@ dotenv==0.9.9
 filelock==3.29.3
 frozenlist==1.8.0
 fsspec==2026.4.0
+furl==2.1.4
 google-auth==2.54.0
 google-genai==2.8.0
 h11==0.16.0
@@ -42,10 +43,12 @@ networkx==3.6.1
 numpy==2.4.6
 openai==2.41.1
 packaging==26.2
+pandas>=2.0.0
 platformdirs==4.10.0
 propcache==0.5.2
 psycopg2==2.9.12
 pgvector>=0.2.0
+playwright>=1.40.0
 pyasn1==0.6.3
 pyasn1_modules==0.4.2
 pycparser==3.0

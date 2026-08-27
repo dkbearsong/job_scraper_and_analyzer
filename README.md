@@ -1,693 +1,383 @@
 # Job Scraper and Analyzer
 
-A multi-stage pipeline that scrapes job listings from company career pages and job boards (LinkedIn, Indeed, ZipRecruiter, Google), analyzes them against your resume and user profile using LLM extraction + semantic embeddings, applies rule-based filtering, performs multi-layered scoring (vector similarity + cheap LLM + strong LLM), and produces a ranked final application queue.
+A multi-stage agentic pipeline that scrapes job listings from API services (Adzuna), job boards (Indeed, LinkedIn, ZipRecruiter, Google), and company career portals. It filters and evaluates them against your professional profile, resume, and benchmark archetypes using a hybrid architecture of deterministic extraction, vector similarity (pgvector), and multi-tiered LLM evaluation (fast cheap classification + deep qualitative reranking) to produce a ranked final application queue.
+
+---
+
+## Table of Contents
+
+- [Pipeline Architecture](#pipeline-architecture)
+- [Quick Start & Installation](#quick-start--installation)
+- [Directory Structure](#directory-structure)
+- [Key Features & Recent Advancements](#key-features--recent-advancements)
+  - [Pluggable Scraper Adapters](#1-pluggable-scraper-adapters)
+  - [Deterministic Extraction & Stage 1.5 Preliminary Filter](#2-deterministic-extraction--stage-15-preliminary-filter)
+  - [Multi-Provider Hybrid LLM Architecture](#3-multi-provider-hybrid-llm-architecture)
+  - [Rate Limiting & Tiered Throttling](#4-rate-limiting--tiered-throttling)
+  - [Role-Specific Seniority & Geocoding Radius](#5-role-specific-seniority--geocoding-radius)
+  - [Negative Vector Scoring](#6-negative-vector-scoring)
+  - [RAG Retrieval & Application Tailoring](#7-rag-retrieval--application-tailoring)
+  - [Model Context Protocol (MCP) Server](#8-model-context-protocol-mcp-server)
+  - [Embedding Regeneration Utility](#9-embedding-regeneration-utility)
+  - [Pipeline Test Runner](#10-pipeline-test-runner)
+- [Writing Custom Scraper Adapters](#writing-custom-scraper-adapters)
+- [Running the Application](#running-the-application)
+  - [CLI Flags Reference](#cli-flags-reference)
+  - [Common Usage Examples](#common-usage-examples)
+- [Understanding Pipeline Output](#understanding-pipeline-output)
+
+---
 
 ## Pipeline Architecture
 
-The system processes jobs through **9 stages**, each building on the previous:
+The system processes jobs through a 10-step sequence designed for maximum cost-efficiency, filtering out unqualified listings early to conserve LLM tokens and API calls:
+
+```
+[Stage 0: Setup] ──> [Stage 1: Scrape] ──> [Stage 1.5: Preliminary Filter]
+                                                         │ (disqualifies non-matches)
+                                                         ▼
+[Stage 4: Archetypes] ◄── [Stage 3: Rule Filter] ◄── [Stage 2: Embed & Extract]
+         │
+         ▼
+[Stage 5: Vector Scoring] ──> [Stage 6: Cheap LLM] ──> [Stage 7: Strong LLM] ──> [Stage 8: Final Queue]
+```
 
 | Stage | Name | What It Does |
 |-------|------|--------------|
-| 0 | **Setup** | Loads `.env`, reads resume + user profile from `documents/`, creates AI engine, extracts skills/job titles via text processing |
-| 1 | **Scrape** | Scrapes jobs via the pluggable adapter system (configured by `scrapers_config.yaml`). Falls back to legacy Part A (company career pages via `site_strategies/`) + Part B (job boards via JobSpy) if no config file is found. |
-| 2 | **Embed + Extract** | Runs deterministic extraction (salary, seniority, work type, timezone), LLM extraction (skills, requirements, summary), and generates embedding vectors for title, skills, requirements, and description |
-| 3 | **Rule Filter** | Applies hard-constraint rules from `user_preferences.yaml` (work type, seniority level, pay range, timezone) — jobs that fail are skipped |
-| 4 | **Archetype Integration** | Loads benchmark archetypes from `archetypes_config.json` plus your Resume and User Profile as archetypes, generating embeddings for each |
-| 5 | **Vector Scoring** | Computes weighted semantic similarity (40% title, 35% skills, 25% responsibilities) between jobs and archetypes, applies keyword/metadata adjustments, and filters by a configurable threshold |
-| 6 | **Cheap LLM** | Uses a fast/cheap LLM to classify top candidates with fit scores and brief rationale |
-| 7 | **Strong LLM** | Uses a more capable LLM to deeply rerank the top-N candidates with detailed analysis |
-| 8 | **Final Queue** | Generates a final ranked application queue with priority levels, final scores, and apply/don't-apply recommendations |
+| **0** | **Setup** | Loads `.env` and `user_preferences.yaml`, extracts skills and titles from resume (`.docx`) and user profile (`.txt`), initializes the AI engine, and configures the database connection. |
+| **1** | **Scrape** | Executes pluggable scraper adapters configured in `scrapers_config.yaml` (e.g. Adzuna API, JobSpy boards, or local career microservice). Merges newly scraped jobs with deduplication. |
+| **1.5** | **Preliminary Filter** | Fast deterministic pre-filter on title keywords, basic location, and work type *before* running expensive embeddings or LLM calls, immediately discarding obvious mismatches. |
+| **2** | **Embed + Extract** | Runs deterministic regex extraction for salary, work flexibility, seniority, and timezone. Uses the extraction LLM for unstructured skills/requirements/summary and generates dense vector embeddings (title, requirements, responsibilities). |
+| **3** | **Rule Filter** | Evaluates hard constraints from `user_preferences.yaml` (work types, seniority levels, role-specific seniority overrides, geocoded target city radius, pay range, and timezones). Failing jobs are flagged as `skip`. |
+| **4** | **Archetype Integration** | Loads benchmark archetypes from `documents/archetypes_config.json` alongside your resume and profile archetypes, computing or loading their vector embeddings. Prepares negative scoring penalty criteria. |
+| **5** | **Vector Scoring** | Calculates multi-vector cosine similarity (weighted: 40% title, 35% skills/requirements, 25% responsibilities) against archetypes. Applies negative penalties for unwanted titles/functions, and filters by similarity threshold. |
+| **6** | **Cheap LLM** | Classifies candidate jobs using a fast, economical model (e.g. Gemini Flash Lite, local LM Studio / Ollama, or Groq), evaluating core fit, strengths, concerns, and outputting an initial `fit_score` (0-100) and `decision` (`yes`, `maybe`, `no`). |
+| **7** | **Strong LLM** | Executes deep qualitative reranking on the top-N candidates using an advanced model (e.g. Gemini Pro, Claude 3.5 Sonnet, or GPT-4o), evaluating career trajectory, scale fit, recruiter red flags, and driving points. |
+| **8** | **Final Queue** | Synthesizes scores from all stages into a final weighted score (0-100), assigning priority levels (`high`, `medium`, `low`) and actionable recommendations (`apply`, `maybe`, `skip`). Saves to database and logs results. |
+
+---
+
+## Quick Start & Installation
+
+> [!IMPORTANT]
+> All setup prerequisites, system requirements, database configuration (`pgvector`), environment variable references, and step-by-step guides have been centralized in **[INSTALL.md](INSTALL.md)**.
+
+### Automated Setup
+
+Run the interactive installation script from the project root:
+
+```bash
+./install.sh
+```
+
+Or in non-interactive mode:
+
+```bash
+./install.sh -y
+```
+
+### Manual Installation Summary
+
+1. **Virtual Environment**: `python3 -m venv .venv && source .venv/bin/activate`
+2. **Install Dependencies**: `pip install -r requirements.txt && playwright install chromium`
+3. **Database**: PostgreSQL 14+ with `pgvector` extension enabled (`CREATE EXTENSION IF NOT EXISTS vector;`)
+4. **Initialize Tables**: `python -c "from app.make_db import make_db; make_db()"`
+5. **Configuration**: Copy `.env.example` to `.env` and customize `user_preferences.yaml`
+6. **Self-Test**: `python tests/test_runner.py --stage 0 --skip-db`
+
+For complete instructions, troubleshooting, and Docker setup, please refer to **[INSTALL.md](INSTALL.md)**.
+
+---
 
 ## Directory Structure
 
 ```
 .
-├── main.py                          # Pipeline orchestrator + entry point
-├── scrapers_config.yaml             # Pluggable scraper adapter configuration
-├── .env                             # Configuration (paths, API keys, LLM settings)
-├── user_preferences.yaml            # Rule filtering preferences
+├── INSTALL.md                       # Comprehensive installation & operational setup guide
+├── README.md                        # Project overview, architecture, and operation reference
+├── install.sh                       # Automated installation and dependency setup script
+├── main.py                          # Pipeline orchestrator and CLI entry point
+├── scrapers_config.yaml             # Scraper adapter configuration (Adzuna, JobSpy, etc.)
+├── user_preferences.yaml            # Filtering rules, LLM providers/models, rate limits
+├── .env.example                     # Sanitized environment configuration template
+├── .env                             # Local secrets, database credentials, and file paths
+├── job_sites.csv                    # Company career sites for scraping
+├── diagnose_db.py                   # Database network and authentication connectivity tester
+├── mcp_server.py                    # Model Context Protocol (MCP) server for AI assistants
+├── regenerate_embeddings.py         # Utility for recomputing vector embeddings in PostgreSQL
+├── requirements.txt                 # Python package dependencies
 ├── app/
-│   ├── ai_engine.py                 # AI/LLM interface (extraction, embeddings)
-│   ├── archetype_engine.py          # Archetype management and comparison
-│   ├── fallback_scraping_instructions.py  # Legacy Part A + Part B scraping (fallback path)
-│   ├── llm_classifier.py            # Cheap LLM + Strong LLM classification stages
-│   ├── make_db.py                   # Database schema creation
-│   ├── postgres_mgr.py              # PostgreSQL database manager
-│   ├── pull_data.py                 # Site scraping (DataPuller)
-│   ├── text_engine.py               # Text processing and deterministic extraction
-│   ├── tui.py                       # Textual-based Terminal UI
-│   ├── vector_engine.py             # Vector operations, scoring adjustments
+│   ├── ai_engine.py                 # Multi-provider LLM interface (LM Studio, Gemini, OpenRouter, etc.)
+│   ├── ai_limiter.py                # Concurrency and rate-limiting throttle (Free vs Paid tiers)
+│   ├── ai_utils.py                  # Embedding generation and batching utilities
+│   ├── archetype_engine.py          # Benchmark role archetypes and negative scoring criteria
+│   ├── backfill_pay_location_embeddings.py  # Utility for backfilling legacy embeddings
+│   ├── config_utils.py              # Configuration loader (.env + user_preferences.yaml)
+│   ├── eval_harness.py              # Prompt evaluation harness for extraction accuracy
+│   ├── fallback_scraping_instructions.py  # Fallback scraping (career sites + JobSpy)
+│   ├── geocoding_cache.json         # Local persistent geocoding coordinate cache
+│   ├── llm_classifier.py            # Cheap LLM (Stage 6) & Strong LLM (Stage 7) evaluators
+│   ├── llm_usage_tracker.py         # Token consumption and cost auditing logger
+│   ├── location_utils.py            # Geocoding and geographic radius calculations
+│   ├── logger.py                    # Structured logging and pipeline statistics
+│   ├── make_db.py                   # PostgreSQL schema creation and pgvector initialization
+│   ├── postgres_mgr.py              # Low-level PostgreSQL connection and query manager
+│   ├── prompt_injection_defender.py # Defense against prompt injections in job descriptions
+│   ├── pull_data.py                 # DataPuller database persistence and retrieval layer
+│   ├── rag_engine.py                # Hybrid vector + metadata retrieval and application tailoring
+│   ├── rule_filters.py              # Deterministic filtering rules (salary, seniority, timezone)
+│   ├── text_engine.py               # Deterministic text processing & regex extraction
+│   ├── vector_engine.py             # Vector operations, similarity scoring, negative penalties
+│   ├── pipeline/
+│   │   ├── stages.py                # Implementations for Pipeline Stages 0 through 8
+│   │   ├── pipeline_utils.py        # Stage routing, stage range parsing, pool merging
+│   │   └── maintenance.py           # 24h description rescraping & final score recalculation
 │   └── scrapers/
-│       ├── __init__.py              # ScraperAdapter ABC, JobData schema, validator
-│       ├── adapter_loader.py        # AdapterLoader: reads YAML, imports + runs adapters
-│       ├── validator.py             # ScrapedDataValidator: validates job data schema
-│       ├── jobspy_adapter.py        # Built-in adapter for JobSpy library
-│       ├── microservice_adapter.py  # Built-in adapter for local scraping microservice
-│       ├── http_adapter.py          # Built-in adapter for HTTP/API endpoints
-│       └── hiring_cafe_adapter.py   # Built-in adapter for hiring.cafe
+│       ├── __init__.py              # ScraperAdapter abstract base class & JobData schema
+│       ├── adapter_loader.py        # Dynamic adapter loader driven by scrapers_config.yaml
+│       ├── adzuna_adapter.py        # Adzuna job search API adapter with full description fetching
+│       ├── jobspy_adapter.py        # Multi-board scraper adapter (Indeed, LinkedIn, Google, ZipRecruiter)
+│       ├── microservice_adapter.py  # Local microservice adapter for company career pages
+│       ├── http_adapter.py          # Generic HTTP REST API scraper adapter
+│       └── validator.py             # Scraped job dictionary validator
 ├── documents/
-│   ├── Your Name Resume.docx        # Your resume (Word format)
-│   ├── User Profile - YourName.txt  # Your skills/profile (plain text)
-│   └── archetypes_config.json       # Benchmark archetype definitions
-├── site_strategies/
-│   └── <company_name>.json          # Per-company scraping strategies (legacy Part A)
-└── archetype_profiles/
-    ├── resume_cache.json            # Cached resume data (auto-generated)
-    ├── user_profile_cache.json      # Cached profile data (auto-generated)
-    └── user_profile_<name>.json     # Cached user profile (auto-generated)
+│   ├── Your Resume.docx             # User resume used for archetype comparisons
+│   ├── User Profile.txt             # Plain-text user skills, titles, and summary
+│   ├── archetypes_config.json       # Benchmark target role definitions
+│   ├── search_terms.csv             # JobSpy search queries
+│   └── adzunda_searches.csv         # Adzuna search queries and parameters
+├── logs/                            # Application logs, app_error.log, and pipeline_stats.log
+└── tests/
+    ├── test_runner.py               # Comprehensive pipeline stage runner with synthetic data
+    └── test_*.py                    # Unit and integration test suites
 ```
 
-## Initial Setup
+---
 
-### 1. Required Documents
+## Key Features & Recent Advancements
 
-Place these files in the `documents/` folder. The paths to these files are configured in `.env`.
+### 1. Pluggable Scraper Adapters
 
-| File | Purpose | Format |
-|------|---------|--------|
-| **Resume** (`.docx`) | Your resume — used as an archetype for semantic comparison | Word document (`.docx`) |
-| **User Profile** (`.txt`) | Plain-text file listing your skills, job titles, and professional summary. This should include a "Skills:" section and a "Job Titles:" section for deterministic extraction | Plain text (`.txt`) |
-| **`archetypes_config.json`** | Benchmark archetype definitions — roles/job families to compare scraped jobs against. Each entry defines a name, title, skills, and responsibilities | JSON array |
+Scraping in Stage 1 is fully decoupled using the `ScraperAdapter` architecture. Instead of hardcoding sources, adapters are declared in `scrapers_config.yaml`:
+- **Adzuna Adapter (`AdzunaAdapter`)**: Connects to the Adzuna API, executing targeted searches defined in `documents/adzunda_searches.csv`, automatically deduplicating against the database, and scraping full descriptions.
+- **JobSpy Adapter (`JobSpyAdapter`)**: Queries Indeed, LinkedIn, ZipRecruiter, and Google with configurable freshness (`hours_old`) and result limits.
+- **Microservice Adapter (`MicroserviceAdapter`)**: Interfaces with a local scraping microservice using JSON strategy files from `site_strategies/`.
+- **Custom HTTP Adapter (`HttpAdapter`)**: Allows querying arbitrary external endpoints.
+- **Fallback Chaining**: Set `run_fallback_after_adapters: true` in `scrapers_config.yaml` to run legacy scrapers after modular adapters have finished.
 
-**Example `archetypes_config.json`:**
+### 2. Deterministic Extraction & Stage 1.5 Preliminary Filter
 
-```json
-[
-    {
-        "name": "AI Tooling Engineer",
-        "title": "Senior AI Tooling Engineer",
-        "skills": "Python OpenAI LangChain Pinecone PyTorch LLMs",
-        "responsibilities": "Develop AI-powered tools. Integrate LLMs into workflows."
-    },
-    {
-        "name": "Backend Python Engineer",
-        "title": "Senior Backend Python Engineer",
-        "skills": "Python FastAPI PostgreSQL AWS Redis Docker",
-        "responsibilities": "Design scalable APIs. Optimize database performance. Deploy cloud services."
-    }
-]
+To drastically cut LLM API costs and execution time:
+- **Preliminary Filtering (Stage 1.5)**: Disqualifies obvious non-matches immediately after scraping based on title keywords and arrangement without making costly embedding or LLM calls.
+- **Deterministic Text Engine**: Extracts salary numbers/ranges, work arrangements (remote/hybrid/onsite), seniority levels, and US timezones using optimized regex patterns in `app/text_engine.py`, reserving LLM calls strictly for ambiguous descriptions.
+- **Prompt Injection Defense**: Untrusted job descriptions are sanitized by `app/prompt_injection_defender.py` before passing into LLM evaluation prompts.
+
+### 3. Multi-Provider Hybrid LLM Architecture
+
+The pipeline supports mixing and matching LLM providers for different stages in `user_preferences.yaml`:
+- **Local Inference**: LM Studio, Ollama, native `sentence-transformers`, `fastembed`.
+- **Cloud Providers**: Google Gemini, OpenRouter, OpenAI, Anthropic Claude, Groq, NVIDIA NIM, Cohere, SiliconFlow.
+- **Example Strategy**: Use local `sentence-transformers` for embeddings (zero cost), local LM Studio or Groq for Stage 2 extraction, Gemini Flash Lite for Stage 6 cheap classification, and Claude 3.5 Sonnet or GPT-4o via OpenRouter for Stage 7 strong reranking.
+
+### 4. Rate Limiting & Tiered Throttling
+
+`app/ai_limiter.py` provides rate-limiting to prevent `429 Too Many Requests` errors:
+- **Free vs. Paid Tiers**: Configurable in `user_preferences.yaml` with explicit `requests_per_minute`, `tokens_per_minute`, and `concurrency` limits.
+- Set `STAGE_6_TIER='free'` or `STAGE_7_TIER='paid'` in `.env` to automatically throttle API requests to match your tier limits.
+
+### 5. Role-Specific Seniority & Geocoding Radius
+
+- **Role Seniority Overrides**: Allows fine-tuning allowed seniority levels per job title. For instance, requiring "senior" for Software Engineer, but accepting "mid-level" or "lead" for Support Engineer.
+- **Geocoding & Radius Filtering**: Target cities configured in `user_preferences.yaml` (e.g. `target_city_range: 50`) calculate true geographic distance using cached coordinates in `app/geocoding_cache.json`.
+
+### 6. Negative Vector Scoring
+
+Jobs matching unwanted job functions or career paths are penalized during Stage 5 vector scoring:
+- Configured under `negative_scoring` in `user_preferences.yaml`.
+- Computes cosine similarity against `avoid_titles` (e.g. "Sales Representative", "Account Executive") and `avoid_functions` (e.g. "cold calling outbound quota prospecting").
+- Jobs exceeding the threshold receive a proportional score reduction (up to `penalty_weight`, e.g. 35%).
+
+### 7. RAG Retrieval & Application Tailoring
+
+Built-in retrieval-augmented generation engine (`app/rag_engine.py`) backed by `pgvector` HNSW indexes:
+- **Corpus Natural Language Query**:
+  ```bash
+  python main.py --rag-query "Find remote Python roles that mention Kubernetes and distributed systems"
+  ```
+- **Job Application Tailoring**:
+  ```bash
+  python main.py --rag-tailor 142
+  ```
+  Generates targeted resume bullet points, key strengths to highlight, and talking points tailored specifically for Job ID 142.
+
+### 8. Model Context Protocol (MCP) Server
+
+Expose your job search pipeline directly to AI assistants like Claude Desktop or Cursor via `mcp_server.py`:
+- Tools exposed:
+  - `search_job_corpus`: Hybrid vector + metadata semantic search across all scraped jobs.
+  - `tailor_application`: Generates a custom tailoring strategy for a given Job ID.
+  - `get_pipeline_status`: Reports stats on active jobs, extractions, and scores.
+  - `list_top_jobs`: Returns the highest-ranked jobs from the final application queue.
+
+### 9. Embedding Regeneration Utility
+
+If you change your embedding model (e.g. switching from `all-MiniLM-L6-v2` to a larger model):
+```bash
+# Regenerate embeddings for jobs added in the last 14 days
+python regenerate_embeddings.py --days-back 14
+
+# Regenerate all jobs and archetypes
+python regenerate_embeddings.py --all-jobs
 ```
 
-**Example User Profile (`User Profile - YourName.txt`):**
+### 10. Pipeline Test Runner
 
-```
-Skills: Python, FastAPI, PostgreSQL, AWS, Docker, Kubernetes, CI/CD, Terraform
-Job Titles: Senior Backend Engineer, DevOps Engineer, Platform Engineer
+Test any stage or the entire pipeline using synthetic fixtures without requiring external scrapers or live database connections:
+```bash
+# List all stages and their input/output contracts
+python tests/test_runner.py --list-stages
 
-Summary: Experienced backend engineer with 8+ years building scalable distributed systems.
-```
+# Test Stage 3 (Rule Filtering) in isolation
+python tests/test_runner.py --stage 3 --skip-db
 
-### 2. Configure `.env`
-
-Create a `.env` file in the project root. Below is a complete reference of all supported variables:
-
-```ini
-# ──────────────────────────────────────────────
-# FILE PATHS
-# ──────────────────────────────────────────────
-
-RESUME='./documents/Your Name Resume.docx'
-# Path to your resume .docx file.
-
-PROFILE='./documents/User Profile - YourName.txt'
-# Path to your user profile .txt file (skills, job titles, summary).
-
-SEARCH_TERMS=''
-# Optional: path to a CSV file of search terms used for job board scraping.
-# If left blank, defaults to ["Software Engineer"].
-# Example CSV content:
-#   Senior Python Engineer
-#   AI/ML Engineer
-#   Platform Engineer
-
-ARCHETYPES_CONFIG='./documents/archetypes_config.json'
-# Path to the JSON file defining benchmark archetypes for comparison.
-
-USER_PREFERENCES_YAML='./user_preferences.yaml'
-# Path to the YAML file containing rule-based filtering preferences.
-
-SCRAPERS_CONFIG='scrapers_config.yaml'
-# Path to the scraper adapter configuration YAML file.
-# Controls which scrapers run during Stage 1.
-
-# ──────────────────────────────────────────────
-# API KEYS
-# ──────────────────────────────────────────────
-
-GEMINMI_API_KEY=''
-# Google Gemini API key. Required only if using Gemini as an LLM provider.
-# Get a key at: https://aistudio.google.com/apikey
-
-OPENROUTER_API_KEY=''
-# OpenRouter API key. Required only if using OpenRouter as an LLM provider.
-# Get a key at: https://openrouter.ai/keys
-
-# ──────────────────────────────────────────────
-# LLM PROVIDERS — GENERAL CONFIGURATION
-# ──────────────────────────────────────────────
-#
-# The pipeline uses LLMs at multiple stages via the AIEngine abstraction layer.
-# Each stage accepts a `provider_name` parameter. Supported providers:
-#
-#   "lm_studio"   — Local inference via LM Studio (http://localhost:{LMS_PORT})
-#                    Works with any model loaded in LM Studio. Set LMS_URL, LMS_PORT below.
-#
-#   "ollama"      — Local inference via Ollama (http://localhost:{OLLAMA_PORT})
-#                    Works with any model pulled to your local Ollama instance.
-#                    Set OLLAMA_URL, OLLAMA_PORT below.
-#
-#   "openrouter"  — Remote API via OpenRouter (https://openrouter.ai/api/v1)
-#                    Provides access to hundreds of models from many providers.
-#                    Requires OPENROUTER_API_KEY. Set OPENROUTER_BASE_URL below.
-#
-#   "gemini"      — Google Gemini API. Requires GEMINMI_API_KEY to be set.
-#
-#   "openai"      — Direct OpenAI API. Requires OPENAI_API_KEY (not currently exposed,
-#                    but the engine can be extended to support it).
-#
-# You can mix providers across stages. For example, use ollama for fast local
-# extraction/embeddings and openrouter for deep analysis with a stronger model.
-#
-# The MODEL variables are provider-specific model identifiers:
-#   - For lm_studio:  model name as loaded in the LM Studio server
-#   - For ollama:     model tag from `ollama list` (e.g. "llama3.1:8b")
-#   - For openrouter: model slug from openrouter.ai/models (e.g. "openai/gpt-4o")
-#   - For gemini:     model name (e.g. "gemini-2.0-flash")
-# Leave blank to use the provider's default model.
-
-# ─── Stage 2: Extraction (skills, requirements, summary from job descriptions) ───
-EXTRACTION_LLM='lm_studio'
-# Provider for LLM-based extraction:
-#   "lm_studio", "ollama", "openrouter", or "gemini".
-
-EXTRACTION_MODEL=''
-# Model identifier for extraction. Examples:
-#   "gemma-4-26b-a4b-it-mlx"   (lm_studio)
-#   "llama3.1:8b"              (ollama)
-#   "openai/gpt-4o-mini"       (openrouter)
-#   "gemini-2.0-flash"         (gemini)
-# Leave blank to use the provider's default model.
-
-# ─── Stage 2: Embeddings (vector generation for titles, skills, descriptions) ───
-EMBEDDINGS_LLM='lm_studio'
-# Provider for embedding generation:
-#   "lm_studio", "ollama", "openrouter", or "gemini".
-
-EMBEDDINGS_MODEL=''
-# Model identifier for embeddings. Examples:
-#   "qwen3-embedding-8b-mxfp8"  (lm_studio)
-#   "nomic-embed-text:latest"   (ollama)
-#   "openai/text-embedding-3-small"  (openrouter)
-#   "text-embedding-004"        (gemini)
-# Leave blank to use the provider's default model.
-
-# ─── Stage 6: Cheap LLM Classification ───
-CHEAP_LLM_PROVIDER='lm_studio'
-# Provider for fast/cheap classification:
-#   "lm_studio", "ollama", "openrouter", or "gemini".
-
-CHEAP_LLM_MODEL=''
-# Model identifier for cheap classification. Leave blank for provider default.
-
-# ─── Stage 7: Strong LLM Reranking ───
-STRONG_LLM_PROVIDER='lm_studio'
-# Provider for deep reranking:
-#   "lm_studio", "ollama", "openrouter", or "gemini".
-
-STRONG_LLM_MODEL=''
-# Model identifier for strong reranking. If left blank, falls back to CHEAP_LLM_MODEL.
-
-# ─── Stage 7: How many top candidates get deep analysis ───
-TOP_N_DEEP_ANALYSIS='25'
-# Number of top candidates from Stage 6 to pass through the strong LLM reranker.
-# Higher values = more thorough analysis but more API calls/cost.
-
-# ──────────────────────────────────────────────
-# LM STUDIO (ONLY NEEDED IF USING lm_studio PROVIDER)
-# ──────────────────────────────────────────────
-
-LMS_URL='http://localhost'
-# Base URL of your LM Studio server.
-
-LMS_PORT='1234'
-# Port of your LM Studio server.
-
-LMS_API_KEY='lm-studio'
-# API key for LM Studio (defaults to "lm-studio").
-
-# ──────────────────────────────────────────────
-# OLLAMA (ONLY NEEDED IF USING ollama PROVIDER)
-# ──────────────────────────────────────────────
-#
-# Ollama runs locally and serves an OpenAI-compatible API.
-# Install from https://ollama.com then pull models with:
-#   ollama pull llama3.1:8b
-#   ollama pull nomic-embed-text
-#
-# Make sure the Ollama service is running before using the pipeline
-# (it runs as a background service on install, or start with `ollama serve`).
-
-OLLAMA_URL='http://localhost'
-# Base URL of your Ollama server.
-
-OLLAMA_PORT='11434'
-# Port of your Ollama server (default: 11434).
-
-OLLAMA_API_KEY=''
-# API key for Ollama (typically not needed for local use; leave blank).
-
-# ──────────────────────────────────────────────
-# OPENROUTER (ONLY NEEDED IF USING openrouter PROVIDER)
-# ──────────────────────────────────────────────
-#
-# OpenRouter provides a unified API for hundreds of models from
-# OpenAI, Anthropic, Google, Meta, Mistral, and many more.
-# See available models at https://openrouter.ai/models
-#
-# Set the model identifier using the format "provider/model-name",
-# for example:
-#   - "openai/gpt-4o"
-#   - "anthropic/claude-sonnet-4-20250514"
-#   - "google/gemini-2.0-flash-001"
-#   - "meta-llama/llama-3.1-70b-instruct"
-#   - "mistralai/mixtral-8x22b-instruct"
-
-OPENROUTER_BASE_URL='https://openrouter.ai/api/v1'
-# Base URL for the OpenRouter API.
-# Change only if you are using a self-hosted or alternative endpoint.
-
-OPENROUTER_API_KEY=''
-# OpenRouter API key. Required for openrouter provider.
-# Get one at https://openrouter.ai/keys
-
-# ──────────────────────────────────────────────
-# SCRAPER API (OPTIONAL)
-# ──────────────────────────────────────────────
-
-SCRAPER_API=''
-# URL for an external scraping API. If left blank, the DataPuller scrapes directly.
+# Test chained execution through Stage 5
+python tests/test_runner.py --from 2 --to 5 --chain --skip-db
 ```
 
-### 3. User Preferences (`user_preferences.yaml`)
+---
 
-This file controls hard-constraint rule filtering in **Stage 3**. Jobs that don't match are flagged as "skip" and excluded from further analysis.
+## Writing Custom Scraper Adapters
 
-```yaml
-# User Preferences for Job Filtering
-#
-# work_types:       Accepted work arrangements. Options: remote, hybrid, on-site
-# seniority_levels: Accepted seniority levels. Options: entry-level, mid-level, senior, lead, manager
-# timezones:        Accepted timezones. Options: EST, CST, MST, PST, GMT, etc.
-# pay_range:        Target annual pay range as a single string (e.g. "$95k-200k" or "95000-200000")
-# target_cities:    Cities to search for jobs on job boards
+You can easily add new job sources by writing a subclass of `ScraperAdapter` (defined in `app/scrapers/__init__.py`) and registering it in `scrapers_config.yaml`.
 
-target_cities:
-  - "Austin, TX"
-  - "Seattle, WA"
-  - "Boston, MA"
-
-work_types:
-  - remote
-  - hybrid
-
-seniority_levels:
-  - mid-level
-  - senior
-
-timezones:
-  - EST
-  - CST
-  - MST
-
-pay_range: "$95k-200k"
-```
-
-**How filtering works:** If a field is set, only jobs matching one of the listed values pass through. Leave a list empty or unset to allow all values for that field. If pay is "Not Specified" for a job, it passes through without comparison.
-
-### 4. Configure `scrapers_config.yaml`
-
-This file controls all scraping during **Stage 1**. It defines a list of adapter entries, each specifying a source to scrape from. If this file is not present, the pipeline falls back to the legacy hardcoded scraping path (Part A: `site_strategies/` + Part B: JobSpy job boards).
-
-**Full config reference (`scrapers_config.yaml`):**
-
-```yaml
-# Scrapers Configuration
-# =====================
-# Each entry defines a scraper adapter to run during Pipeline Stage 1.
-#
-# Fields:
-#   name:     Unique identifier for this scraper source
-#   adapter:  Dotted Python module path OR built-in short name:
-#               - "JobSpyAdapter"       Built-in: job boards via JobSpy
-#               - "MicroserviceAdapter"  Built-in: company career page microservice
-#               - "HttpAdapter"          Built-in: HTTP/API endpoint
-#               - "my_module.MyClass"   Custom adapter (must subclass ScraperAdapter)
-#   enabled:  true/false (default: true)
-#   config:   Adapter-specific configuration (see each adapter's docs)
-#
-# Environment variables can be referenced as ${VAR_NAME} in config values.
-
-scrapers:
-  # ── Company Career Pages via Local Microservice ──
-  - name: microservice_company_boards
-    adapter: MicroserviceAdapter
-    enabled: true
-    config:
-      sites_file: "${JOB_SITES}"
-      strategies_dir: "./site_strategies"
-      microservice_host: "http://localhost"
-      microservice_port: "5052"
-      timeout: 120
-      delay_min: 1
-      delay_max: 3
-
-  # ── Job Boards via JobSpy (Indeed, LinkedIn, ZipRecruiter, Google) ──
-  - name: jobspy_boards
-    adapter: JobSpyAdapter
-    enabled: true
-    config:
-      boards:
-        - indeed
-        - linkedin
-        - zip_recruiter
-        - google
-      search_terms:
-        - Software Engineer
-      target_cities:
-        - Remote
-      requests_wanted: 200
-      hours_old: 24
-      delay_min: 1
-      delay_max: 4
-      country_indeed: "USA"
-
-  # ── HTTP/API Endpoint (example) ──
-  # - name: my_remote_scraper
-  #   adapter: HttpAdapter
-  #   enabled: false
-  #   config:
-  #     url: "https://my-scraper-service.com/api/scrape"
-  #     method: POST
-  #     timeout: 120
-  #     headers:
-  #       Authorization: "Bearer ${MY_API_TOKEN}"
-
-  # ── HiringCafe (live browser-based scraper) ──
-  - name: hiring_cafe
-    adapter: app.scrapers.hiring_cafe_adapter.HiringCafeAdapter
-    enabled: true
-    config:
-      max_pages: 5
-      headless: false
-```
-
-**Adapter-specific `config` reference:**
-
-| Adapter | Config Key | Type | Default | Description |
-|---------|-----------|------|---------|-------------|
-| **MicroserviceAdapter** | `sites_file` | str | `""` | Path to CSV file listing company names + URLs |
-| | `strategies_dir` | str | `"./site_strategies"` | Directory containing site strategy JSON files |
-| | `microservice_host` | str | `"http://localhost"` | Microservice host |
-| | `microservice_port` | str | `"5052"` | Microservice port |
-| | `timeout` | int | `120` | Request timeout (seconds) |
-| | `delay_min` | float | `1.0` | Min delay between requests |
-| | `delay_max` | float | `3.0` | Max delay between requests |
-| **JobSpyAdapter** | `boards` | list | `["indeed"]` | Job boards to scrape (indeed, linkedin, zip_recruiter, google) |
-| | `search_terms` | list | `["Software Engineer"]` | Search terms/queries |
-| | `target_cities` | list | `["Remote"]` | Cities to search in |
-| | `requests_wanted` | int | `200` | Results per board/search |
-| | `hours_old` | int | `24` | Filter: listings within N hours |
-| | `delay_min` / `delay_max` | float | `1` / `4` | Rate limiting delay range |
-| | `country_indeed` | str | `"USA"` | Country for Indeed searches |
-| **HttpAdapter** | `url` | str | *(required)* | Endpoint URL |
-| | `method` | str | `"POST"` | HTTP method (GET or POST) |
-| | `headers` | dict | `{}` | Custom HTTP headers |
-| | `timeout` | int | `120` | Request timeout |
-| | `payloads` | list | `[]` | Optional request payloads (one request each) |
-| | `payloads_file` | str | `""` | JSON file containing payloads |
-| | `auth_header` | str | `""` | Authorization header value |
-| | `delay_min` / `delay_max` | float | `1` / `3` | Rate limiting delay |
-| **HiringCafeAdapter** | `max_pages` | int | `5` | Max pages to scrape |
-| | `headless` | bool | `false` | Run browser in headless mode |
-
-### 5. Site Strategies (Company Career Page Scraping)
-
-To scrape jobs from specific company career pages (legacy Part A or MicroserviceAdapter), create a `site_strategies/` directory and add a JSON file for each company. The filename (without `.json`) must match an entry in the `JOB_SITES` list.
-
-**Example `site_strategies/example_company.json`:**
-
-```json
-{
-    "company_url": "https://careers.example.com",
-    "url": "https://careers.example.com/jobs",
-    "fields": [
-        {"selector": "h2.job-title", "name": "title"},
-        {"selector": "span.location", "name": "location"},
-        {"selector": ".description", "name": "description"}
-    ],
-    "pagination": {
-        "parameter": "page",
-        "start": 1,
-        "max": 5
-    }
-}
-```
-
-**Strategy fields:**
-
-| Field | Purpose |
-|-------|---------|
-| `url` | The URL to scrape (can be a string or list of strings for multiple pages) |
-| `company_url` | Base company URL for resolving relative links |
-| `fields` | CSS selectors mapping to title, location, description, etc. |
-| `pagination` | (Optional) If present, the scraper uses `extract-paginated` method |
-| `js_config` | (Optional) If present, the scraper uses `extract-js` method (browser rendering) |
-
-**Loading strategies:**
-1. Add company entries to `sites` list in the `DataPuller`'s JOB_SITES file (legacy) or configure `MicroserviceAdapter` in `scrapers_config.yaml`
-2. Create a corresponding `site_strategies/<company_name>.json` file
-3. The pipeline automatically loads and applies these strategies during Stage 1
-
-### 6. Search Terms for Job Boards (Optional)
-
-If you want to control which job titles/roles are searched on Indeed, LinkedIn, etc., create a CSV file (e.g., `search_terms.csv`) and set `SEARCH_TERMS` in `.env`:
-
-```
-Senior Python Engineer
-AI/ML Engineer
-Platform Engineer
-DevOps Engineer
-```
-
-If left unset, the pipeline defaults to `["Software Engineer"]`.
-
-## Writing a Custom Scraper Adapter
-
-You can extend the pipeline by writing a custom scraper adapter and registering it in `scrapers_config.yaml`. The adapter system dynamically imports, configures, and runs any class that subclasses `ScraperAdapter`.
-
-### Required Interface
-
-Every adapter must subclass `ScraperAdapter` (defined in `app/scrapers/__init__.py`) and implement these three methods:
+### Required Adapter Interface
 
 ```python
 from typing import Any, Dict, List
 from app.scrapers import ScraperAdapter
 
-class MyCustomAdapter(ScraperAdapter):
+class CustomJobBoardAdapter(ScraperAdapter):
     def get_name(self) -> str:
-        """
-        Return a human-readable name for this adapter (used in logs).
-        The name from scrapers_config.yaml is injected automatically.
-        """
-        return self._config.get("name", "my_custom_adapter")
+        """Return the adapter identifier used in logs."""
+        return self._config.get("name", "custom_job_board")
 
     def configure(self, config: Dict[str, Any]) -> None:
-        """
-        Accept adapter-specific configuration from scrapers_config.yaml.
-        Store whatever settings your adapter needs.
-        """
+        """Receive adapter-specific configuration from scrapers_config.yaml."""
         self._config = config
-        # Example: self._api_key = config.get("api_key", "")
-        #          self._max_results = config.get("max_results", 100)
+        self._api_key = config.get("api_key", "")
+        self._max_results = config.get("max_results", 50)
 
     async def scrape(self) -> List[Dict[str, Any]]:
         """
-        Execute the scraping operation.
-        
-        Returns:
-            List of job dicts conforming to the JobData schema.
-            Each dict must at minimum contain 'title' and 'company' keys.
+        Execute scraping and return a list of job dictionaries.
+        Must conform to the JobData schema (at minimum: 'title' and 'company').
         """
-        # Your scraping logic here
         jobs = []
-        # ...
+        # ... perform API request or web scrape ...
+        jobs.append({
+            "title": "Senior Backend Engineer",
+            "company": "Acme Corp",
+            "source": "custom_job_board",
+            "url": "https://example.com/jobs/123",
+            "location": "Austin, TX",
+            "flexibility": "remote",
+            "pay": "$130k-$170k",
+            "description": "Full job description text...",
+        })
         return jobs
 ```
 
-### Job Data Schema
-
-Your adapter's `scrape()` method must return a list of dicts conforming to this schema:
-
-| Field | Required | Type | Description |
-|-------|----------|------|-------------|
-| `title` | **Yes** | str | Job title |
-| `company` | **Yes** | str | Company name |
-| `source` | No | str | Origin identifier (e.g. "indeed", "custom_api") |
-| `url` | No | str or None | Job listing URL |
-| `link` | No | str or None | Alias for url (backward compat) |
-| `flexibility` | No | str or None | Work type: "remote", "hybrid", "onsite", "NA" |
-| `pay` | No | str or None | Pay range (e.g. "$80k-$120k") |
-| `location` | No | str or None | Full location (e.g. "Austin, TX") |
-| `description` | No | str or None | Job description text |
-| `city` | No | str or None | City name |
-| `state` | No | str or None | State abbreviation |
-| `company_url` | No | str or None | Company career page URL |
-
 ### Registering in `scrapers_config.yaml`
-
-Add an entry under `scrapers:` with the dotted module path to your adapter class:
 
 ```yaml
 scrapers:
-  - name: my_custom_source
-    adapter: my_package.scrapers.MyCustomAdapter
+  - name: my_job_source
+    adapter: my_module.scrapers.CustomJobBoardAdapter
     enabled: true
     config:
-      api_key: "${MY_API_KEY}"
+      api_key: "${CUSTOM_API_KEY}"
       max_results: 100
-      # any other adapter-specific settings
 ```
 
-Configuration values support `${ENV_VAR}` syntax for referencing environment variables. The `name` field is automatically injected into the config dict so `get_name()` can access it.
-
-### Reference Example
-
-Here is the `HiringCafeAdapter` (from `app/scrapers/hiring_cafe_adapter.py`) as a complete working example:
-
-```python
-from typing import Any, Dict, List
-from app.scrapers import ScraperAdapter
-
-class HiringCafeAdapter(ScraperAdapter):
-    def get_name(self) -> str:
-        return self._config.get("name", "hiring_cafe")
-
-    def configure(self, config: Dict[str, Any]) -> None:
-        self._config = config
-        self._max_pages = config.get("max_pages", 5)
-        self._headless = config.get("headless", False)
-
-    async def scrape(self) -> List[Dict[str, Any]]:
-        # ... implementation returns List[Dict] with title, company, etc.
-        pass
-```
-
-### Fallback Path
-
-If `scrapers_config.yaml` is not found or contains no enabled adapters, the pipeline falls back to the legacy scraping logic in `app/fallback_scraping_instructions.py`. This legacy path runs:
-- **Part A:** Company career pages using `site_strategies/` JSON files via a local microservice
-- **Part B:** Job boards (Indeed, LinkedIn, ZipRecruiter, Google) via the JobSpy library
-
-To migrate from the legacy path to the adapter system, simply create `scrapers_config.yaml` with the appropriate adapter entries.
+---
 
 ## Running the Application
 
-### Option A: Command Line (Headless)
+### Basic Command
 
-Run the full pipeline end-to-end with console output only:
+Execute the complete end-to-end pipeline (Stages 0 through 8):
 
 ```bash
 python main.py
 ```
 
-This executes all 9 stages sequentially, printing progress summaries as it goes.
-
 ### CLI Flags Reference
-
-All supported command-line flags for `python main.py`:
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--pages` | int | `None` | Max pages per URL for Stage 1 scraping (overrides the `max_pages` config in `scrapers_config.yaml`) |
-| `--visible` | flag | `False` | Show browser window during scraping (disables headless mode). By default browsers run headless. |
-| `--debug` | flag | `False` | Enable debug-level logging throughout the pipeline. |
-| `--log-file` | str | `None` | Path to a file where logs should be written. Relative paths are placed under `logs/`. |
-| `--skip-db` | flag | `False` | Skip all database persistence for every stage. Useful for development/demo runs when no PostgreSQL instance is available. |
-| `--verbose` | flag | `False` | Enable verbose output with detailed per-job debug information. |
-| `--skip-part-a` | flag | `False` | Skip Part A (company career-page scraping via `site_strategies/`) in the legacy fallback path. Only applies when no `scrapers_config.yaml` is found or when `run_fallback_after_adapters` is enabled. |
-| `-s, --stage` | str | `0-8` | Stage range to run. Accepts a single stage (`3`), a range (`2-5`), or `all`. See stage reference below. |
-| `-l, --limit` | int | `50` | Max records to pull from the database in any bulk-load operation when resuming from a partial run. |
-| `--scrape-missing-24h` | flag | `False` | At Stage 1, **only** re-scrape descriptions for jobs from the previous 24 hours that are missing them. Skips all other scraping. |
-| `--reprocess` | flag | `False` | Force Stage 2 to reprocess and re-embed jobs that already have embeddings (normally Stage 2 skips jobs with existing embeddings). |
+| `-s, --stage` | str | `"0-8"` | Stage range to run. Accepts a single stage (`3`), a range (`2-5`), or all (`0-8`). |
+| `-l, --limit` | int | `50` | Maximum records to load from PostgreSQL in bulk-load operations when resuming. |
+| `--skip-db` | flag | `False` | Disables database persistence across all stages (runs purely in-memory). |
+| `--verbose` | flag | `False` | Enables detailed per-job debug logging across all pipeline stages. |
+| `--debug` | flag | `False` | Enables debug-level logging output. |
+| `--log-file` | str | `None` | Path to custom log file (stored under `logs/`). |
+| `--pages` | int | `None` | Override max scraping pages per site for Stage 1. |
+| `--visible` | flag | `False` | Shows browser window during browser-based scraping (disables headless). |
+| `--skip-part-a` | flag | `False` | Skips company career-page scraping in the legacy fallback path. |
+| `--scrape-missing-24h` | flag | `False` | At Stage 1, only re-scrapes descriptions for jobs from the last 24h that lack them. |
+| `--reprocess` | int/flag | `0` | Clears database extractions and scores for the specified number of days (default: 1 day if flag is given without a value) to allow re-running stages. |
+| `--recalculate-final-scores` | flag | `False` | Re-evaluates final scores and priority rankings from stored database scores without re-running models. |
+| `--rag-query` | str | `None` | Executes a natural language query over the pgvector job corpus and prints an answer with citations. |
+| `--rag-tailor` | int | `None` | Generates a tailored resume and application talking points for a specific Job ID. |
 
-**Stage reference for `--stage` / `-s`:**
-
-| Stage | Name | Description |
-|-------|------|-------------|
-| 0 | Setup | Load `.env`, resume, profile; create AI engine |
-| 1 | Scrape | Scrape jobs via adapters or legacy fallback |
-| 2 | Embed + Extract | Embeddings + LLM extraction on job descriptions |
-| 3 | Rule Filter | Hard-constraint filtering (work type, pay, etc.) |
-| 4 | Archetype | Load archetypes and generate embeddings |
-| 5 | Vector Score | Semantic similarity scoring against archetypes |
-| 6 | Cheap LLM | Fast/cheap LLM classification |
-| 7 | Strong LLM | Deep LLM reranking |
-| 8 | Final Queue | Ranked application queue with recommendations |
-
-**Example usage:**
+### Common Usage Examples
 
 ```bash
 # Run the full pipeline
 python main.py
 
-# Run only stages 2 through 5 with verbose output
-python main.py -s 2-5 --verbose
+# Run only rule filtering (Stage 3) with verbose output
+python main.py -s 3 --verbose
 
-# Run Stage 3 (rule filter) only
-python main.py -s 3
+# Run embedding generation through cheap classification (Stages 2-6)
+python main.py -s 2-6
 
-# Scrape with a visible browser, debug logging, and skip database
-python main.py --visible --debug --skip-db
+# Offline demo run without requiring PostgreSQL
+python main.py --skip-db
 
-# Re-scrape only missing descriptions for the last 24 hours
-python main.py --scrape-missing-24h
+# Scrape jobs with a visible browser window and debug logging
+python main.py -s 1 --visible --debug
 
-# Re-process embeddings for jobs that already have them
-python main.py -s 2 --reprocess
+# Reprocess and re-evaluate jobs from the last 7 days
+python main.py --reprocess 7 -s 2-8
+
+# Recalculate final application queue scores after tuning weights in user_preferences.yaml
+python main.py --recalculate-final-scores
+
+# Query the job corpus using RAG
+python main.py --rag-query "What companies are hiring remote engineers with FastAPI and Docker?"
+
+# Generate tailored application strategy for Job ID 42
+python main.py --rag-tailor 42
 ```
 
-### Database Persistence
+---
 
-By default, the pipeline stores scraped jobs, embeddings, LLM results, and the final queue to a PostgreSQL database. The TUI runs with `skip_db=True` to avoid requiring a database connection during development or demos.
+## Understanding Pipeline Output
 
-To configure PostgreSQL, set these in `.env` (used by `DataPuller`):
-
-```ini
-DB_NAME='job_scraper'
-DB_USER='postgres'
-DB_PASSWORD='your_password'
-DB_HOST='localhost'
-DB_PORT='5432'
-```
-
-The database schema is managed by `app/make_db.py`. Run it separately to initialize tables:
-
-```bash
-python -c "from app.make_db import init_db; init_db()"
-```
-
-## Understanding the Output
-
-After a full pipeline run, each job in the final queue contains:
+Each job that completes the pipeline receives comprehensive evaluation data stored in PostgreSQL:
 
 | Field | Source | Meaning |
 |-------|--------|---------|
-| `final_score` | Stage 8 | Overall score (0-100) combining all previous stages |
-| `priority` | Stage 8 | Priority level: `high`, `medium`, or `low` |
-| `apply_recommendation` | Stage 8 | Recommendation: `apply`, `maybe`, or `skip` |
-| `semantic_score` / `semantic_score_percent` | Stage 5 | Vector similarity score (0.0-1.0 / 0-100%) against best-matching archetype |
-| `best_archetype` | Stage 5 | Name of the archetype that most closely matches this job |
-| `cheap_llm_result.fit_score` | Stage 6 | Fast LLM fit assessment (0-100) |
-| `cheap_llm_result.decision` | Stage 6 | Fast LLM decision: `yes`, `maybe`, `no` |
-| `strong_llm_result.final_score` | Stage 7 | Deep LLM analysis score (0-100) |
-| `strong_llm_result.decision` | Stage 7 | Deep LLM decision with confidence level |
+| `final_score` | Stage 8 | Normalized overall score (0-100) combining vector similarity, Cheap LLM, and Strong LLM evaluations. |
+| `priority` | Stage 8 | Action priority: `high`, `medium`, or `low`. |
+| `apply_recommendation` | Stage 8 | Final recommendation: `apply`, `maybe`, or `skip`. |
+| `semantic_score` | Stage 5 | Vector similarity score (0.0 to 1.0) against the closest archetype. |
+| `best_archetype` | Stage 5 | Name of the archetype that best matches the job. |
+| `cheap_llm_result.fit_score` | Stage 6 | Fast LLM fit assessment (0-100). |
+| `cheap_llm_result.decision` | Stage 6 | Fast LLM screening decision: `yes`, `maybe`, `no`. |
+| `cheap_llm_result.strengths` | Stage 6 | Specific skills and qualifications that match your profile. |
+| `cheap_llm_result.concerns` | Stage 6 | Gaps, missing requirements, or potential mismatches. |
+| `strong_llm_result.final_score` | Stage 7 | In-depth LLM analysis score (0-100). |
+| `strong_llm_result.driving_points` | Stage 7 | Key selling points to emphasize in your application and interview. |
+| `strong_llm_result.red_flags` | Stage 7 | Warning signs identified in the job posting or company expectations. |

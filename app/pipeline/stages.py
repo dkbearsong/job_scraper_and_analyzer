@@ -180,6 +180,9 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
     print("PIPELINE STAGE 1: SCRAPING")
     print("=" * 50)
 
+    from app.fallback_scraping_instructions import clear_host_server_errors, format_host_server_error_report
+    clear_host_server_errors()
+
     if scrape_missing_24h:
         print("[Stage 1] scrape_missing_24h is True. Running dedicated DB description re-scraping workflow...")
         if skip_db:
@@ -343,11 +346,19 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
     # ── Convert raw scraped data to processed_job_pool format ──
     processed_job_pool = _normalize_to_pool_format(all_scraped)
 
-    # If no jobs were scraped (e.g., in test mode), use dummy data as fallback
+    # If no jobs were scraped, crash fully detailing any host server messages
     if not processed_job_pool:
-        from tests.test_data import make_dummy_stage1_output
-        print("No real jobs scraped. Using dummy fallback data.")
-        processed_job_pool = make_dummy_stage1_output(15)
+        host_report = format_host_server_error_report()
+        error_msg = (
+            f"\n{'='*80}\n"
+            f"FATAL SCRAPING ERROR: Stage 1 Scraping produced 0 jobs.\n"
+            f"No jobs were successfully scraped by enabled adapters or fallback scrapers.\n"
+            f"{host_report}\n"
+            f"{'='*80}"
+        )
+        print(error_msg)
+        logging.error(error_msg)
+        raise RuntimeError(error_msg)
 
     print(f"Stage 1 complete: {len(processed_job_pool)} jobs in pool.")
     return processed_job_pool
@@ -575,11 +586,6 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
             regex_reqs = existing_db_reqs or text_processor.extract_requirements(description)
             regex_resps = existing_db_resps or text_processor.extract_responsibilities(description)
             regex_summary = raw_job.get('extracted_summary') or text_processor.extract_summary_from_description(description, title=title)
-
-            # If no structured section headers exist in description, fallback to sentence extraction
-            if not regex_reqs and not regex_resps and len(description) > 0:
-                clean_sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', description) if len(s.strip()) > 15]
-                regex_reqs = clean_sentences
 
             extracted_data = {
                 "metadata": {
@@ -858,9 +864,13 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
                 # Batch vector generation
                 title_text = str(features.get('title') or '')
                 reqs_list = features.get('requirements') or []
-                requirements_text = ", ".join(str(r) for r in reqs_list if r) if isinstance(reqs_list, list) else str(reqs_list)
+                requirements_text = "\n• ".join(str(r) for r in reqs_list if r) if isinstance(reqs_list, list) else str(reqs_list)
+                if requirements_text and isinstance(reqs_list, list):
+                    requirements_text = "• " + requirements_text
                 resps_list = features.get('responsibilities') or []
-                responsibilities_text = ", ".join(str(r) for r in resps_list if r) if isinstance(resps_list, list) else str(resps_list)
+                responsibilities_text = "\n• ".join(str(r) for r in resps_list if r) if isinstance(resps_list, list) else str(resps_list)
+                if responsibilities_text and isinstance(resps_list, list):
+                    responsibilities_text = "• " + responsibilities_text
                 summary_text = str(features.get('summary') or '')
 
                 pay_val = features.get('pay') or features.get('pay_rate') or ''

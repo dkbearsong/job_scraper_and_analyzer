@@ -156,7 +156,7 @@ class DataPuller:
         try:
             timeout_seconds = int(os.getenv("MICROSERVICE_TIMEOUT", "5000"))
         except (TypeError, ValueError):
-            timeout_seconds = 120
+            timeout_seconds = 5000
         timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:

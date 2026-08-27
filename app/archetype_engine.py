@@ -147,7 +147,7 @@ class ArchetypeManager:
         job_responsibilities_text = "\n".join(job_responsibilities) if job_responsibilities else job_description
 
         # Prepare fallback text strings for embedding generation when no pre-computed ones exist
-        requirements_text = ", ".join(job_requirements) if job_requirements else ""
+        requirements_text = "\n".join(job_requirements) if job_requirements else ""
 
         # 2. Retrieve or generate embeddings for each job component
         #    Priority: pre-computed embeddings > fresh generation from text
@@ -299,7 +299,7 @@ class ArchetypeManager:
         job_responsibilities = job_data.get("features", {}).get("responsibilities", [])
         job_description = job_data.get("features", {}).get("description", "")
         job_resp_text = "\n".join(job_responsibilities) if job_responsibilities else job_description
-        req_text = ", ".join(job_requirements) if job_requirements else ""
+        req_text = "\n".join(job_requirements) if job_requirements else ""
 
         job_title_emb = self._get_job_embedding(job_data, "title_vector", job_title)
         job_req_emb = self._get_job_embedding(job_data, "requirements_vector", req_text)

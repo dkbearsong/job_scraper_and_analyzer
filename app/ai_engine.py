@@ -5,6 +5,9 @@ import os
 import json
 import time
 import requests
+
+# Disable tokenizers parallelism to prevent semaphore leaks and fork crashes
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # Import real libraries
 from openai import OpenAI
 from anthropic import Anthropic
@@ -917,7 +920,7 @@ class HuggingFaceProvider(BaseAIProvider):
             try:
                 from sentence_transformers import SentenceTransformer
                 model_name = self.embeddings_model or "all-MiniLM-L6-v2"
-                model = SentenceTransformer(model_name)
+                model = SentenceTransformer(model_name, device="cpu")
                 return model.encode(text).tolist()
             except Exception as e:
                 print(f"[Hugging Face Local Embedding Error] {e}")
@@ -940,7 +943,7 @@ class HuggingFaceProvider(BaseAIProvider):
             try:
                 from sentence_transformers import SentenceTransformer
                 model_name = self.embeddings_model or "all-MiniLM-L6-v2"
-                model = SentenceTransformer(model_name)
+                model = SentenceTransformer(model_name, device="cpu")
                 return model.encode(text).tolist()
             except Exception as le:
                 print(f"[Hugging Face Local Fallback Embedding Error] {le}")
@@ -1018,11 +1021,12 @@ class FastEmbedProvider(BaseAIProvider):
                         target_model = "all-MiniLM-L6-v2"
                     try:
                         from fastembed import TextEmbedding
-                        self._model = TextEmbedding(model_name=target_model)
+                        self._model = TextEmbedding(model_name=target_model, threads=1)
                     except Exception:
                         try:
                             from sentence_transformers import SentenceTransformer
-                            self._model = SentenceTransformer(target_model)
+                            # Force device="cpu" to prevent Apple Silicon MPS Metal driver race conditions and SIGSEGV crashes
+                            self._model = SentenceTransformer(target_model, device="cpu")
                         except Exception as e:
                             print(f"[FastEmbed/SentenceTransformer Error] {e}")
         return self._model
@@ -1035,12 +1039,13 @@ class FastEmbedProvider(BaseAIProvider):
         if model is None:
             return []
         try:
-            if hasattr(model, "embed"):
-                embeddings = list(model.embed([text]))
-                return embeddings[0].tolist() if hasattr(embeddings[0], 'tolist') else list(embeddings[0])
-            elif hasattr(model, "encode"):
-                res = model.encode(text)
-                return res.tolist() if hasattr(res, 'tolist') else list(res)
+            with self._lock:
+                if hasattr(model, "embed"):
+                    embeddings = list(model.embed([text]))
+                    return embeddings[0].tolist() if hasattr(embeddings[0], 'tolist') else list(embeddings[0])
+                elif hasattr(model, "encode"):
+                    res = model.encode(text)
+                    return res.tolist() if hasattr(res, 'tolist') else list(res)
         except Exception as e:
             print(f"[FastEmbed Error] {e}")
             return []
@@ -1051,12 +1056,13 @@ class FastEmbedProvider(BaseAIProvider):
             return [[] for _ in texts]
         try:
             valid_texts = [t if (t and isinstance(t, str) and t.strip()) else " " for t in texts]
-            if hasattr(model, "embed"):
-                embeddings = list(model.embed(valid_texts))
-                return [e.tolist() if hasattr(e, 'tolist') else list(e) for e in embeddings]
-            elif hasattr(model, "encode"):
-                embeddings = model.encode(valid_texts)
-                return [e.tolist() if hasattr(e, 'tolist') else list(e) for e in embeddings]
+            with self._lock:
+                if hasattr(model, "embed"):
+                    embeddings = list(model.embed(valid_texts))
+                    return [e.tolist() if hasattr(e, 'tolist') else list(e) for e in embeddings]
+                elif hasattr(model, "encode"):
+                    embeddings = model.encode(valid_texts)
+                    return [e.tolist() if hasattr(e, 'tolist') else list(e) for e in embeddings]
         except Exception as e:
             print(f"[FastEmbed Batch Error] {e}")
             return [self.generate_embedding(t) for t in texts]

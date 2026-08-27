@@ -21,7 +21,7 @@ import re
 import time as time_module
 import glob
 from urllib.parse import urlparse
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 from app.prompt_injection_defender import sanitize_untrusted_text
 
@@ -199,6 +199,73 @@ def _extract_domain(url: str) -> str:
 
 
 _js_scrape_lock = asyncio.Lock()
+_host_server_errors: List[Dict[str, Any]] = []
+
+
+def record_host_server_error(
+    company: str = "Unknown",
+    endpoint: str = "",
+    target_url: str = "",
+    status_code: Any = "UNKNOWN",
+    error: str = "",
+    exception: str = "",
+    raw_response: str = "",
+    stage: str = "Fallback Scraping"
+) -> None:
+    """Record an error response or network failure encountered from the scraping host server."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "stage": stage,
+        "company": company or "Unknown",
+        "endpoint": endpoint or "",
+        "target_url": target_url or "",
+        "status_code": status_code,
+        "error": error or "",
+        "exception": exception or "",
+        "raw_response": str(raw_response)[:1000] if raw_response else "",
+    }
+    _host_server_errors.append(entry)
+
+
+def get_host_server_errors() -> List[Dict[str, Any]]:
+    """Return all recorded host server errors."""
+    return list(_host_server_errors)
+
+
+def clear_host_server_errors() -> None:
+    """Clear recorded host server errors for a new run."""
+    _host_server_errors.clear()
+
+
+def format_host_server_error_report() -> str:
+    """Format a detailed diagnostic report of all host server errors."""
+    if not _host_server_errors:
+        return "No host server error messages recorded."
+
+    host = os.getenv("SCRAPER_HOST", "localhost")
+    port = os.getenv("SCRAPER_PORT", "5052")
+    lines = [
+        "=" * 80,
+        "HOST SERVER FAILURE REPORT",
+        f"Host Server Target: http://{host}:{port}",
+        f"Total Host Server Errors Recorded: {len(_host_server_errors)}",
+        "=" * 80,
+    ]
+    for idx, err in enumerate(_host_server_errors, 1):
+        lines.append(f"\n[{idx}] Source / Company: {err['company']} ({err['stage']})")
+        if err.get("endpoint"):
+            lines.append(f"    Host Endpoint:    {err['endpoint']}")
+        if err.get("target_url"):
+            lines.append(f"    Target Scrape URL:{err['target_url']}")
+        lines.append(f"    HTTP Status Code: {err['status_code']}")
+        if err.get("error"):
+            lines.append(f"    Error Message:    {err['error']}")
+        if err.get("exception"):
+            lines.append(f"    Exception:        {err['exception']}")
+        if err.get("raw_response"):
+            lines.append(f"    Response Snippet: {err['raw_response']}")
+    lines.append("\n" + "=" * 80)
+    return "\n".join(lines)
 
 
 def _is_js_request(args, kwargs) -> bool:
@@ -249,7 +316,7 @@ async def _request_with_domain_backoff(
         *args, **kwargs: Passed through to request_fn.
 
     Returns:
-        Response dict from request_fn (may still be a 429 if retries exhausted).
+        Response dict from request_fn (may still be a 429 or error dict if retries exhausted).
     """
     domain = _extract_domain(url)
     state = _domain_backoff.setdefault(domain, {
@@ -266,13 +333,39 @@ async def _request_with_domain_backoff(
         print(f"  [Rate Limit] Domain '{domain}' in cooldown. Waiting {wait:.1f}s...")
         await asyncio.sleep(wait)
 
+    result = {}
     for attempt in range(max_retries + 1):
-        if _is_js_request(args, kwargs):
-            async with _js_scrape_lock:
+        try:
+            if _is_js_request(args, kwargs):
+                async with _js_scrape_lock:
+                    result = await request_fn(*args, **kwargs)
+            else:
                 result = await request_fn(*args, **kwargs)
-        else:
-            result = await request_fn(*args, **kwargs)
-        status = int(result.get("status_code", 200))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            result = {
+                "status_code": "500",
+                "data": [],
+                "error": "Request exception during execution",
+                "exception": repr(e),
+                "url": url,
+            }
+
+        if not isinstance(result, dict):
+            result = {
+                "status_code": "500",
+                "data": [],
+                "error": f"Invalid return type from request: {type(result)}",
+                "raw": repr(result),
+                "url": url,
+            }
+
+        status_raw = result.get("status_code", 200)
+        try:
+            status = int(status_raw)
+        except (ValueError, TypeError):
+            status = 500
 
         if status == 429:
             state["retry_count"] += 1
@@ -281,7 +374,10 @@ async def _request_with_domain_backoff(
             # Use Retry-After header if present, else exponential backoff
             retry_after = result.get("retry_after") or result.get("headers", {}).get("Retry-After")
             if retry_after:
-                delay = float(retry_after)
+                try:
+                    delay = float(retry_after)
+                except ValueError:
+                    delay = min(state["current_delay"] * (backoff_factor ** attempt), max_delay)
             else:
                 delay = min(state["current_delay"] * (backoff_factor ** attempt), max_delay)
 
@@ -296,14 +392,15 @@ async def _request_with_domain_backoff(
                 print(f"  [Rate Limit] 429 on '{domain}' — exhausted {max_retries} retries. "
                       f"Giving up on this request.")
         else:
-            # Success — gradually reduce backoff
-            state["success_streak"] += 1
-            if state["success_streak"] >= success_reset_threshold:
-                state["current_delay"] = base_delay
-                state["retry_count"] = 0
+            # Success or non-429 error
+            if status == 200:
+                state["success_streak"] += 1
+                if state["success_streak"] >= success_reset_threshold:
+                    state["current_delay"] = base_delay
+                    state["retry_count"] = 0
             return result
 
-    return result  # Return the last 429 response after exhausting retries
+    return result
 
 
 def error_logger_continue(error_msg: str) -> None:
@@ -341,6 +438,7 @@ def scrape_single_job_board(
             else company,
             "company_url": company_url,
             "title": item["title"],
+            "description": item.get("description"),
             "flexibility": (
                 item["flexibility"]
                 if item.get("flexibility") is not None
@@ -407,20 +505,62 @@ async def scrape_sites(
     Returns:
         List of scraped job dicts, or None on failure.
     """
-    # Wrap with per-domain exponential backoff for 429 handling
     strategy_url = i["strategy"].get("url", company_url)
-    new_data = await _request_with_domain_backoff(
-        dp.scrape_data,
-        i["strategy"],
-        url=strategy_url,
-        api_method=i["api_method"],
-    )
-    new_data["source"] = i["strategy"]["source"]
-    if new_data["status_code"] != 200:
+    company_name = i.get("company", "Unknown")
+    api_method = i.get("api_method", "extract")
+    host = os.getenv("SCRAPER_HOST", "localhost")
+    port = os.getenv("SCRAPER_PORT", "5052")
+    endpoint = f"http://{host}:{port}/{api_method}"
+
+    try:
+        new_data = await _request_with_domain_backoff(
+            dp.scrape_data,
+            i["strategy"],
+            url=strategy_url,
+            api_method=api_method,
+        )
+    except Exception as e:
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=strategy_url,
+            status_code="EXCEPTION",
+            error="Exception during scraping request",
+            exception=repr(e),
+            stage="Part A (Company Board)"
+        )
+        print(f"Scraping exception for {company_name}: {e}. Continuing to next strategy...")
+        return None
+
+    if not isinstance(new_data, dict):
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=strategy_url,
+            status_code="INVALID_RESPONSE",
+            error=f"Expected response dict, got {type(new_data)}",
+            raw_response=repr(new_data),
+            stage="Part A (Company Board)"
+        )
+        return None
+
+    new_data["source"] = i["strategy"].get("source", company_name)
+    status_code = str(new_data.get("status_code", "200"))
+    if status_code != "200":
         error_msg = new_data.get("error", "")
         exception_msg = new_data.get("exception", "")
         raw_text = new_data.get("raw", "")
-        target_url = new_data.get("url", "")
+        target_url = new_data.get("url", strategy_url)
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=target_url,
+            status_code=status_code,
+            error=error_msg,
+            exception=exception_msg,
+            raw_response=raw_text,
+            stage="Part A (Company Board)"
+        )
         details_parts = []
         if target_url:
             details_parts.append(f"URL: {target_url}")
@@ -433,13 +573,23 @@ async def scrape_sites(
         if not details_parts:
             details_parts.append("No error message provided.")
         print(
-            f"Scraping data failed for {i.get('company', 'Unknown')}. Status code {new_data['status_code']}. "
+            f"Scraping data failed for {company_name}. Status code {status_code}. "
             + " | ".join(details_parts)
+            + " (Continuing with remaining strategies...)"
         )
         return None
     if "data" not in new_data:
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=strategy_url,
+            status_code="NO_DATA_KEY",
+            error="Response missing 'data' key",
+            raw_response=repr(new_data),
+            stage="Part A (Company Board)"
+        )
         print(
-            f"Warning: No 'data' key in response from {i['company']}. "
+            f"Warning: No 'data' key in response from {company_name}. "
             f"Response: {new_data}"
         )
         return None
@@ -450,14 +600,24 @@ async def scrape_sites(
         first_item = new_data["data"][0]
         if isinstance(first_item, dict) and first_item.get("jobs") is not None:
             maker = scrape_multi_job_board(
-                new_data, company_url, i["company"]
+                new_data, company_url, company_name
             )
         else:
             maker = scrape_single_job_board(
-                new_data, company_url, i["company"]
+                new_data, company_url, company_name
             )
     except (KeyError, IndexError, TypeError) as e:
-        print(f"Error: {e}\nNew Data: {new_data}")
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=strategy_url,
+            status_code="PARSE_ERROR",
+            error=f"Error parsing job data structure: {e}",
+            exception=repr(e),
+            raw_response=repr(new_data.get("data")),
+            stage="Part A (Company Board)"
+        )
+        print(f"Error parsing data for {company_name}: {e}\nNew Data: {new_data}")
         return None
 
     return maker
@@ -763,12 +923,17 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
     job_ids_to_skip = []
     enriched_descriptions = {} # url -> description
     enriched_pays = {} # url -> pay
+    failed_strategy_domains = set() # domains that failed strategy generation (avoid re-generating)
+    processed_count = 0
+    total_db_jobs = len(jobs_without_desc)
  
     skipped_jobs_lock = asyncio.Lock()
     job_ids_to_skip_lock = asyncio.Lock()
     updated_count_lock = asyncio.Lock()
     enriched_descriptions_lock = asyncio.Lock()
     enriched_pays_lock = asyncio.Lock()
+    failed_strategy_domains_lock = asyncio.Lock()
+    processed_count_lock = asyncio.Lock()
 
     # Group jobs by domain
     domain_to_jobs = defaultdict(list)
@@ -820,15 +985,8 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
             except Exception:
                 domain = source.lower()
             
-            print(f"  No strategy file found for source '{source}'. Generating strategy for domain '{domain}' using {url}...")
-            # Call generation function
-            success = await dp.generate_and_test_strategy(destination_link=url, job_id=db_id, domain_name=domain)
-            if success:
-                strategy_path = find_strategy_file(source)
-                if not strategy_path:
-                    strategy_path = os.path.join(job_page_strategy_dir, f"{domain}.json")
-            else:
-                print(f"  Failed to generate a working strategy for DB job {db_id} ({url})")
+            # If strategy generation previously failed for this domain, skip quickly
+            if domain in failed_strategy_domains:
                 log_entry = {
                     "id": db_id,
                     "job_name": job_name,
@@ -841,6 +999,39 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                     skipped_jobs.append(log_entry)
                 async with job_ids_to_skip_lock:
                     job_ids_to_skip.append(db_id)
+                async with processed_count_lock:
+                    processed_count += 1
+                    if processed_count % 25 == 0 or processed_count == total_db_jobs:
+                        print(f"  [DB Descriptions] Progress: {processed_count}/{total_db_jobs} jobs processed ({updated_count} descriptions updated, {len(skipped_jobs)} skipped)...")
+                return
+
+            print(f"  No strategy file found for source '{source}'. Generating strategy for domain '{domain}' using {url}...")
+            # Call generation function
+            success = await dp.generate_and_test_strategy(destination_link=url, job_id=db_id, domain_name=domain)
+            if success:
+                strategy_path = find_strategy_file(source)
+                if not strategy_path:
+                    strategy_path = os.path.join(job_page_strategy_dir, f"{domain}.json")
+            else:
+                async with failed_strategy_domains_lock:
+                    failed_strategy_domains.add(domain)
+                print(f"  Failed to generate a working strategy for DB job {db_id} ({url}). Cached failure for domain '{domain}'.")
+                log_entry = {
+                    "id": db_id,
+                    "job_name": job_name,
+                    "company_name": company_name,
+                    "source": source,
+                    "date": (job_date.isoformat() if hasattr(job_date, "isoformat") else str(job_date)) if job_date else datetime.now().isoformat(),
+                    "url": url,
+                }
+                async with skipped_jobs_lock:
+                    skipped_jobs.append(log_entry)
+                async with job_ids_to_skip_lock:
+                    job_ids_to_skip.append(db_id)
+                async with processed_count_lock:
+                    processed_count += 1
+                    if processed_count % 25 == 0 or processed_count == total_db_jobs:
+                        print(f"  [DB Descriptions] Progress: {processed_count}/{total_db_jobs} jobs processed ({updated_count} descriptions updated, {len(skipped_jobs)} skipped)...")
                 return
 
         try:
@@ -901,7 +1092,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                             desc_text = next(
                                 (v for v in data_result[0].values()
                                  if isinstance(v, str) and len(v) > 50),
-                                ""
+                                 ""
                             )
                         if desc_text and len(desc_text) > 50:
                             description = sanitize_untrusted_text(desc_text)
@@ -910,7 +1101,36 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                         scraped_pay = data_result[0].get("pay_range") or data_result[0].get("pay") or data_result[0].get("pay_rate")
                         if scraped_pay:
                             parsed_pay = parse_pay_range(scraped_pay)
+                else:
+                    status_code = str(result.get("status_code", "UNKNOWN"))
+                    error_msg = result.get("error", "")
+                    exception_msg = result.get("exception", "")
+                    raw_text = result.get("raw", "")
+                    host = os.getenv("SCRAPER_HOST", "localhost")
+                    port = os.getenv("SCRAPER_PORT", "5052")
+                    target_endpoint = result.get("url", f"http://{host}:{port}/{api_method}")
+                    record_host_server_error(
+                        company=company_name or source,
+                        endpoint=target_endpoint,
+                        target_url=url,
+                        status_code=status_code,
+                        error=error_msg,
+                        exception=exception_msg,
+                        raw_response=raw_text,
+                        stage="DB Descriptions"
+                    )
             except Exception as e:
+                host = os.getenv("SCRAPER_HOST", "localhost")
+                port = os.getenv("SCRAPER_PORT", "5052")
+                record_host_server_error(
+                    company=company_name or source,
+                    endpoint=f"http://{host}:{port}/{api_method}",
+                    target_url=url,
+                    status_code="EXCEPTION",
+                    error="Exception scraping description",
+                    exception=repr(e),
+                    stage="DB Descriptions"
+                )
                 print(f"  Error scraping description for DB job {db_id}: {e}")
 
         if description:
@@ -947,6 +1167,11 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                 skipped_jobs.append(log_entry)
             async with job_ids_to_skip_lock:
                 job_ids_to_skip.append(db_id)
+
+        async with processed_count_lock:
+            processed_count += 1
+            if processed_count % 25 == 0 or processed_count == total_db_jobs:
+                print(f"  [DB Descriptions] Progress: {processed_count}/{total_db_jobs} jobs processed ({updated_count} descriptions updated, {len(skipped_jobs)} skipped)...")
 
     async def process_domain_db_jobs(domain: str, jobs_list: list):
         for job in jobs_list:
@@ -1256,38 +1481,69 @@ async def _pipeline_stage_scrape_legacy(
         global_semaphore = asyncio.Semaphore(int(os.getenv("SCRAPER_CONCURRENCY", concurrency)))
 
         async def scrape_strategy(strat_item):
-            company_url = strat_item["strategy"].pop("company_url", None)
-            print(f"Scraping {strat_item['company']}...")
-            results_local = []
-            urls = strat_item["strategy"]["url"]
-            
-            # If strategy url is a list, process them sequentially for this company to avoid hitting them too fast
-            if isinstance(urls, list):
-                for url_val in urls:
-                    new_payload = dict(strat_item)
-                    new_payload["strategy"] = dict(strat_item["strategy"])
-                    new_payload["strategy"]["url"] = url_val
+            company_name = strat_item.get("company", "Unknown")
+            start_time = time_module.time()
+            try:
+                company_url = strat_item["strategy"].pop("company_url", None)
+                results_local = []
+                urls = strat_item["strategy"]["url"]
+                
+                # If strategy url is a list, process them sequentially for this company to avoid hitting them too fast
+                if isinstance(urls, list):
+                    print(f"Scraping {company_name} ({len(urls)} URLs)...")
+                    consecutive_failures = 0
+                    for idx, url_val in enumerate(urls):
+                        new_payload = dict(strat_item)
+                        new_payload["strategy"] = dict(strat_item["strategy"])
+                        new_payload["strategy"]["url"] = url_val
+                        async with global_semaphore:
+                            d = await scrape_sites(new_payload, company_url, dp)
+                        if d:
+                            consecutive_failures = 0
+                            if isinstance(d, list):
+                                results_local.extend(d)
+                            else:
+                                results_local.append(d)
+                        else:
+                            consecutive_failures += 1
+                            if consecutive_failures >= 2 and (idx + 1) < len(urls):
+                                print(f"  [{company_name}] Encountered {consecutive_failures} consecutive failures/timeouts. Skipping remaining {len(urls) - (idx + 1)} URLs to prevent stalling.")
+                                break
+                else:
+                    print(f"Scraping {company_name}...")
                     async with global_semaphore:
-                        d = await scrape_sites(new_payload, company_url, dp)
+                        d = await scrape_sites(strat_item, company_url, dp)
                     if d:
                         if isinstance(d, list):
                             results_local.extend(d)
                         else:
                             results_local.append(d)
-            else:
-                async with global_semaphore:
-                    d = await scrape_sites(strat_item, company_url, dp)
-                if d:
-                    if isinstance(d, list):
-                        results_local.extend(d)
-                    else:
-                        results_local.append(d)
-            return results_local
+                elapsed = time_module.time() - start_time
+                print(f"Finished {company_name} in {elapsed:.1f}s ({len(results_local)} jobs scraped).")
+                return results_local
+            except Exception as e:
+                elapsed = time_module.time() - start_time
+                print(f"Error scraping strategy for {company_name} after {elapsed:.1f}s: {e}. Continuing with remaining strategies...")
+                host = os.getenv("SCRAPER_HOST", "localhost")
+                port = os.getenv("SCRAPER_PORT", "5052")
+                record_host_server_error(
+                    company=company_name,
+                    endpoint=f"http://{host}:{port}/{strat_item.get('api_method', 'extract')}",
+                    target_url=str(strat_item.get("strategy", {}).get("url", "")),
+                    status_code="EXCEPTION",
+                    error=f"Uncaught exception in scrape_strategy for {company_name}",
+                    exception=repr(e),
+                    stage="Part A (Company Board)"
+                )
+                return []
 
         tasks = [scrape_strategy(strat) for strat in site_strategies]
-        scraped_lists = await asyncio.gather(*tasks)
+        scraped_lists = await asyncio.gather(*tasks, return_exceptions=True)
         for sublist in scraped_lists:
-            data.extend(sublist)
+            if isinstance(sublist, Exception):
+                print(f"Strategy task raised an exception: {sublist}. Continuing...")
+            elif isinstance(sublist, list):
+                data.extend(sublist)
 
         print(f"Total jobs scraped from company boards: {len(data)}")
 

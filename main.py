@@ -3,6 +3,21 @@ import sys
 import argparse
 import logging
 import asyncio
+
+# Ensure stdout and stderr flush immediately (line-buffered) even when redirected to a log file
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
+# Disable tokenizers parallelism to prevent semaphore leaks and fork crashes
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from typing import Optional, List, Dict, Tuple, Any, Union
 
 from app.pipeline.stages import (
@@ -65,7 +80,8 @@ async def main(scrape_pages: Optional[int] = None,
                reprocess: Optional[Any] = 0,
                recalculate_final_scores: bool = False,
                rag_query: Optional[str] = None,
-               rag_tailor: Optional[int] = None):
+               rag_tailor: Optional[int] = None,
+               verbose: bool = False):
     """
     Run selected pipeline stages.
 
@@ -80,6 +96,7 @@ async def main(scrape_pages: Optional[int] = None,
         scrape_missing_24h: Only scrape descriptions for jobs from the last 24h.
         reprocess: Number of days to go back in DB and clear for reprocessing (int or bool).
         recalculate_final_scores: Recalculate final scores from DB scores and exit.
+        verbose: Enable verbose logging across pipeline stages.
 
     Returns:
         Pipeline result from the last executed stage.
@@ -96,7 +113,7 @@ async def main(scrape_pages: Optional[int] = None,
     _move_existing_logs()
 
     # Stage 0 is always run (provides essential infrastructure)
-    setup_data = await pipeline_stage_setup(skip_db=skip_db, verbose=False)
+    setup_data = await pipeline_stage_setup(skip_db=skip_db, verbose=verbose)
     dp = setup_data["dp"]
     ai = setup_data["ai"]
     tp = setup_data["tp"]
@@ -162,7 +179,7 @@ async def main(scrape_pages: Optional[int] = None,
         processed_job_pool = await pipeline_stage_scrape(
             setup_data=setup_data,
             skip_db=skip_db,
-            verbose=False,
+            verbose=verbose,
             max_pages=scrape_pages,
             headless=not scrape_visible,
             debug_logging=scrape_debug,
@@ -182,7 +199,7 @@ async def main(scrape_pages: Optional[int] = None,
             text_processor=tp,
             dp=dp,
             skip_db=skip_db,
-            verbose=False
+            verbose=verbose
         )
         _log_pipeline_stats("1.5: Preliminary Filter", len(processed_job_pool), source_hint="hard_rules")
 
@@ -227,7 +244,7 @@ async def main(scrape_pages: Optional[int] = None,
                 text_processor=tp,
                 dp=dp,
                 skip_db=skip_db,
-                verbose=False,
+                verbose=verbose,
             )
 
             if _extraction_llm == "lm_studio":
@@ -627,4 +644,5 @@ if __name__ == "__main__":
         recalculate_final_scores=args.recalculate_final_scores,
         rag_query=args.rag_query,
         rag_tailor=args.rag_tailor,
+        verbose=args.verbose,
     ))
