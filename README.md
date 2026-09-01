@@ -168,7 +168,7 @@ Scraping in Stage 1 is fully decoupled using the `ScraperAdapter` architecture. 
 ### 2. Deterministic Extraction & Stage 1.5 Preliminary Filter
 
 To drastically cut LLM API costs and execution time:
-- **Preliminary Filtering (Stage 1.5)**: Disqualifies obvious non-matches immediately after scraping based on title keywords and arrangement without making costly embedding or LLM calls.
+- **Preliminary Filtering (Stage 1.5)**: Disqualifies obvious non-matches immediately after scraping based on title keywords/regex disqualifiers (`disqualified_titles` in `user_preferences.yaml`), seniority, pay, and arrangement without making costly embedding or LLM calls. Failing jobs are marked `skip` in the database and purged from active pipeline memory.
 - **Deterministic Text Engine**: Extracts salary numbers/ranges, work arrangements (remote/hybrid/onsite), seniority levels, and US timezones using optimized regex patterns in `app/text_engine.py`, reserving LLM calls strictly for ambiguous descriptions.
 - **Prompt Injection Defense**: Untrusted job descriptions are sanitized by `app/prompt_injection_defender.py` before passing into LLM evaluation prompts.
 

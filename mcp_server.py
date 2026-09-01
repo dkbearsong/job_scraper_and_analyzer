@@ -9,7 +9,34 @@ import sys
 import json
 import asyncio
 import logging
+import datetime
+import uuid
+from decimal import Decimal
 from typing import Dict, Any
+
+def serialize_json_default(obj: Any) -> Any:
+    """JSON serializer for objects not serializable by default json code (Decimal, datetime, uuid, etc.)."""
+    if isinstance(obj, Decimal):
+        if obj.is_nan():
+            return None
+        if obj.is_infinite():
+            return str(obj)
+        return int(obj) if obj % 1 == 0 else float(obj)
+    elif isinstance(obj, (datetime.datetime, datetime.date, datetime.time)):
+        return obj.isoformat()
+    elif isinstance(obj, uuid.UUID):
+        return str(obj)
+    elif hasattr(obj, "tolist"):
+        return obj.tolist()
+    elif hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+def json_dumps_safe(obj: Any, **kwargs) -> str:
+    """json.dumps wrapper with default serializer to prevent serialization errors on Decimal, datetime, and custom objects."""
+    kwargs.setdefault("default", serialize_json_default)
+    return json.dumps(obj, **kwargs)
+
 
 from app.postgres_mgr import PostgresManager
 from app.pull_data import DataPuller
@@ -102,7 +129,7 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, An
         work_type = arguments.get("work_type")
         top_k = arguments.get("top_k", 5)
         results = get_rag().hybrid_search(query_text=query, work_type=work_type, top_k=top_k)
-        return {"content": [{"type": "text", "text": json.dumps(results, indent=2)}]}
+        return {"content": [{"type": "text", "text": json_dumps_safe(results, indent=2)}]}
 
     elif name == "get_job_insights":
         job_id = arguments.get("job_id")
@@ -123,7 +150,7 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, An
         )
         if not rows:
             return {"content": [{"type": "text", "text": f"Job ID {job_id} not found."}], "isError": True}
-        return {"content": [{"type": "text", "text": json.dumps(dict(rows[0]), indent=2, default=str)}]}
+        return {"content": [{"type": "text", "text": json_dumps_safe(dict(rows[0]), indent=2)}]}
 
     elif name == "generate_application_strategy":
         job_id = arguments.get("job_id")
@@ -134,13 +161,13 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, An
         except (TypeError, ValueError):
             return {"content": [{"type": "text", "text": "Invalid job_id: must be an integer."}], "isError": True}
         res = await get_rag().generate_tailored_application(job_id)
-        return {"content": [{"type": "text", "text": json.dumps(res, indent=2)}]}
+        return {"content": [{"type": "text", "text": json_dumps_safe(res, indent=2)}]}
 
     elif name == "query_candidate_profile":
         query = arguments.get("query", "")
         results = get_rag().hybrid_search(query_text=query, top_k=3)
         candidate_chunks = [r for r in results if r.get("job_id") is None]
-        return {"content": [{"type": "text", "text": json.dumps(candidate_chunks, indent=2)}]}
+        return {"content": [{"type": "text", "text": json_dumps_safe(candidate_chunks, indent=2)}]}
 
     else:
         return {"content": [{"type": "text", "text": f"Unknown tool: {name}"}], "isError": True}
@@ -207,7 +234,7 @@ async def run_mcp_server():
                 "error": {"code": -32601, "message": f"Method '{method}' not found"}
             }
 
-        out_bytes = (json.dumps(response) + "\n").encode("utf-8")
+        out_bytes = (json_dumps_safe(response) + "\n").encode("utf-8")
         writer.write(out_bytes)
         await writer.drain()
 

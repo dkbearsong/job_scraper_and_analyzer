@@ -152,12 +152,26 @@ class DataPuller:
 
     async def scrape_data(self, payload:dict, api_method:str="extract"):
         url = f"http://{ws_micro_host}:{ws_micro_port}/{api_method}"
-        # Allow overriding the microservice request timeout via env var
         try:
-            timeout_seconds = int(os.getenv("MICROSERVICE_TIMEOUT", "5000"))
+            total_timeout_env = os.getenv("MICROSERVICE_TOTAL_TIMEOUT") or os.getenv("MICROSERVICE_TIMEOUT", "500")
+            timeout_seconds = int(total_timeout_env) if total_timeout_env else 500
         except (TypeError, ValueError):
-            timeout_seconds = 5000
-        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+            timeout_seconds = 500
+
+        try:
+            connect_timeout = int(os.getenv("MICROSERVICE_CONNECT_TIMEOUT", "30"))
+        except (TypeError, ValueError):
+            connect_timeout = 30
+
+        # sock_read must match the full timeout (not 90s), because the microservice returns
+        # the entire response in a single batch once page rendering/pagination completes.
+        # total=None ensures the request stays alive as long as keep-alives are sent every 30s.
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            connect=connect_timeout,
+            sock_connect=connect_timeout,
+            sock_read=timeout_seconds,
+        )
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # print(f"url: {url} | payload: {payload}")
@@ -546,7 +560,7 @@ class DataPuller:
         except Exception as e:
             print(f"Warning: Could not create table {table_name}: {e}")
 
-    def save_vector_scores(self, filtered_job_pool: list):
+    def save_vector_scores(self, filtered_job_pool: list, overwrite: bool = False):
         """Persists vector scoring results to the vector_scores table."""
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS vector_scores (
@@ -570,29 +584,56 @@ class DataPuller:
  
         for rank, job in enumerate(filtered_job_pool, start=1):
             job_id = job['metadata']['job_id']
-            # Check if job_id already exists in vector_scores
-            check_sql = "SELECT 1 FROM vector_scores WHERE job_id = %s"
-            exists = self.conn.execute_sql(check_sql, params=(job_id,), fetch=True)
-            if exists:
-                print(f"Failsafe: Job ID {job_id} already exists in vector_scores. Skipping insert.")
-                continue
+            if not overwrite:
+                # Check if job_id already exists in vector_scores
+                check_sql = "SELECT 1 FROM vector_scores WHERE job_id = %s"
+                exists = self.conn.execute_sql(check_sql, params=(job_id,), fetch=True)
+                if exists:
+                    print(f"Failsafe: Job ID {job_id} already exists in vector_scores. Skipping insert.")
+                    continue
 
-            insert_sql = """
-                INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
-                                           title_similarity, requirements_similarity,
-                                           responsibility_similarity, adjusted_score, rank)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
-            self.conn.execute_sql(insert_sql, params=(
-                job_id,
-                job.get('best_archetype', ''),
-                job.get('semantic_score', 0),
-                job.get('title_similarity', 0),
-                job.get('requirements_similarity', 0),
-                job.get('responsibility_similarity', 0),
-                job.get('adjusted_score', 0),
-                rank
-            ), dbname=self.dbname)
+                insert_sql = """
+                    INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
+                                               title_similarity, requirements_similarity,
+                                               responsibility_similarity, adjusted_score, rank)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """
+                self.conn.execute_sql(insert_sql, params=(
+                    job_id,
+                    job.get('best_archetype', ''),
+                    job.get('semantic_score', 0),
+                    job.get('title_similarity', 0),
+                    job.get('requirements_similarity', 0),
+                    job.get('responsibility_similarity', 0),
+                    job.get('adjusted_score', 0),
+                    rank
+                ), dbname=self.dbname)
+            else:
+                upsert_sql = """
+                    INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
+                                               title_similarity, requirements_similarity,
+                                               responsibility_similarity, adjusted_score, rank, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (job_id) DO UPDATE SET
+                        archetype_name = EXCLUDED.archetype_name,
+                        semantic_score = EXCLUDED.semantic_score,
+                        title_similarity = EXCLUDED.title_similarity,
+                        requirements_similarity = EXCLUDED.requirements_similarity,
+                        responsibility_similarity = EXCLUDED.responsibility_similarity,
+                        adjusted_score = EXCLUDED.adjusted_score,
+                        rank = EXCLUDED.rank,
+                        created_at = CURRENT_TIMESTAMP
+                """
+                self.conn.execute_sql(upsert_sql, params=(
+                    job_id,
+                    job.get('best_archetype', ''),
+                    job.get('semantic_score', 0),
+                    job.get('title_similarity', 0),
+                    job.get('requirements_similarity', 0),
+                    job.get('responsibility_similarity', 0),
+                    job.get('adjusted_score', 0),
+                    rank
+                ), dbname=self.dbname)
 
     def save_token_usage(self, run_id: str, run_timestamp, records: list):
         """Saves LLM token usage records for a run to the database."""

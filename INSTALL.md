@@ -348,6 +348,16 @@ seniority_levels:
   - mid-level
   - senior
 
+# Disqualified Job Titles (Stage 1.5 Deterministic Regex Filter)
+# Immediately marks jobs matching these words, phrases, or regex patterns as skip in DB and removes from memory
+disqualified_titles:
+  - "Sales Representative"
+  - "Account Executive"
+  - "Call Center"
+  - "Telemarketing"
+  - "Insurance Agent"
+  - "Real Estate Agent"
+
 # Granular role-specific seniority overrides
 role_seniority_levels:
   - role_keywords:

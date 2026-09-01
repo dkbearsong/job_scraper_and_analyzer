@@ -60,6 +60,66 @@ def role_matches_title(kw: str, title: str) -> bool:
     return all(w in title_words for w in kw_words)
 
 
+def is_title_disqualified(title: str, disqualified_titles: list) -> bool:
+    """
+    Checks if a job title matches any disqualified word, phrase, or regex pattern.
+    
+    Supports:
+    - Case-insensitive whole-word/bounded phrase matching (e.g. "sales" matches "Sales Director", but not "Wholesales" or "Salesforce")
+    - Quoted strings (e.g. '"Exact Match"') for exact substring matching
+    - Raw regex patterns (e.g. r'\b(sales|intern(ship)?)\b')
+    """
+    if not title or not disqualified_titles:
+        return False
+    if not isinstance(title, str):
+        title = str(title)
+    title_clean = title.strip()
+    if not title_clean:
+        return False
+
+    for item in disqualified_titles:
+        if not item:
+            continue
+        if not isinstance(item, str):
+            item = str(item)
+        item_clean = item.strip()
+        if not item_clean:
+            continue
+
+        # Check for quotation marks for exact substring matching
+        is_quoted = (item_clean.startswith('"') and item_clean.endswith('"')) or (item_clean.startswith("'") and item_clean.endswith("'"))
+        if is_quoted:
+            clean_item = item_clean[1:-1].strip().lower()
+            if clean_item and clean_item in title_clean.lower():
+                return True
+            continue
+
+        # If user explicitly provided a regex pattern containing special regex syntax
+        has_regex_metachars = any(c in item_clean for c in r'.^$*+?{}[]\|()')
+        if has_regex_metachars:
+            try:
+                if re.search(item_clean, title_clean, re.IGNORECASE):
+                    return True
+            except re.error:
+                pass
+
+        # Standard word/phrase bounded regex matching with flexible whitespace
+        words = item_clean.split()
+        if not words:
+            continue
+        escaped_words = [re.escape(w) for w in words]
+        pattern_str = r'\s+'.join(escaped_words)
+
+        left_b = r'\b' if re.match(r'^\w', item_clean) else r'(?:^|\s)'
+        right_b = r'\b' if re.search(r'\w$', item_clean) else r'(?:$|\s)'
+        bounded_regex = rf'{left_b}{pattern_str}{right_b}'
+
+        if re.search(bounded_regex, title_clean, re.IGNORECASE):
+            return True
+
+    return False
+
+
 def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
     """
     Evaluates a job against hard constraints.
@@ -67,6 +127,19 @@ def apply_rule_filters(job: dict, user_preferences: dict) -> bool:
     """
     from app.location_utils import check_location_proximity
     features = job.get('features', {})
+
+    # 0. Job Title Disqualification Filter (Stage 1.5 Deterministic Regex Filter)
+    job_title = features.get('title') or job.get('title') or job.get('job_name', '')
+    disqualified_titles = (
+        user_preferences.get('disqualified_titles')
+        or user_preferences.get('disqualified_job_titles')
+        or user_preferences.get('disqualify_titles')
+        or user_preferences.get('excluded_titles')
+        or []
+    )
+    if disqualified_titles and job_title:
+        if is_title_disqualified(job_title, disqualified_titles):
+            return True
 
     # 1. Work Type Filter
     job_work_type = features.get('work_type')

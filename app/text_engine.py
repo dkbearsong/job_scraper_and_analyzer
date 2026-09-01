@@ -42,6 +42,11 @@ class TextProcessor:
             "matches": found_keywords
         }
 
+    def is_title_disqualified(self, title: str, disqualified_titles: list) -> bool:
+        """Checks if a job title matches any disqualified word, phrase, or regex pattern."""
+        from app.rule_filters import is_title_disqualified
+        return is_title_disqualified(title, disqualified_titles)
+
     def get_section_content(self, text: str, header_name: str) -> str:
         """Extracts a block of text belonging to a specific header from markdown text."""
         pattern = rf"{re.escape(header_name)}[:\n\r]+([\s\S]*?)(?=\n[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*[:\n]|\Z)"

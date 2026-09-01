@@ -141,13 +141,14 @@ class ArchetypeManager:
         job_title = job_data.get("features", {}).get("title", "")
         job_requirements = job_data.get("features", {}).get("requirements", [])
         job_responsibilities = job_data.get("features", {}).get("responsibilities", [])
-        job_description = job_data.get("features", {}).get("description", "")
-
-        # Use responsibilities if available, otherwise fall back to description
-        job_responsibilities_text = "\n".join(job_responsibilities) if job_responsibilities else job_description
+        job_description = job_data.get("features", {}).get("description", "") or job_data.get("features", {}).get("summary", "")
 
         # Prepare fallback text strings for embedding generation when no pre-computed ones exist
-        requirements_text = "\n".join(job_requirements) if job_requirements else ""
+        req_text_joined = "\n".join(str(r) for r in job_requirements if r) if isinstance(job_requirements, list) else str(job_requirements or "")
+        resp_text_joined = "\n".join(str(r) for r in job_responsibilities if r) if isinstance(job_responsibilities, list) else str(job_responsibilities or "")
+
+        requirements_text = req_text_joined if req_text_joined.strip() else (resp_text_joined if resp_text_joined.strip() else job_description)
+        job_responsibilities_text = resp_text_joined if resp_text_joined.strip() else (req_text_joined if req_text_joined.strip() else job_description)
 
         # 2. Retrieve or generate embeddings for each job component
         #    Priority: pre-computed embeddings > fresh generation from text
@@ -169,10 +170,16 @@ class ArchetypeManager:
 
             if job_requirements_embedding is not None and archetype.requirements_embedding is not None:
                 requirements_similarity = self.vector_engine.compute_similarity(job_requirements_embedding, archetype.requirements_embedding)
+            elif job_responsibilities_embedding is not None and archetype.requirements_embedding is not None:
+                requirements_similarity = self.vector_engine.compute_similarity(job_responsibilities_embedding, archetype.requirements_embedding)
 
             if job_responsibilities_embedding is not None and archetype.responsibilities_embedding is not None:
                 responsibilities_similarity = self.vector_engine.compute_similarity(
                     job_responsibilities_embedding, archetype.responsibilities_embedding
+                )
+            elif job_requirements_embedding is not None and archetype.responsibilities_embedding is not None:
+                responsibilities_similarity = self.vector_engine.compute_similarity(
+                    job_requirements_embedding, archetype.responsibilities_embedding
                 )
 
             # Calculate combined similarity for sorting (simple average as fallback)
@@ -297,9 +304,13 @@ class ArchetypeManager:
         job_title = job_data.get("features", {}).get("title", "")
         job_requirements = job_data.get("features", {}).get("requirements", [])
         job_responsibilities = job_data.get("features", {}).get("responsibilities", [])
-        job_description = job_data.get("features", {}).get("description", "")
-        job_resp_text = "\n".join(job_responsibilities) if job_responsibilities else job_description
-        req_text = "\n".join(job_requirements) if job_requirements else ""
+        job_description = job_data.get("features", {}).get("description", "") or job_data.get("features", {}).get("summary", "")
+
+        req_text_joined = "\n".join(str(r) for r in job_requirements if r) if isinstance(job_requirements, list) else str(job_requirements or "")
+        resp_text_joined = "\n".join(str(r) for r in job_responsibilities if r) if isinstance(job_responsibilities, list) else str(job_responsibilities or "")
+
+        job_resp_text = resp_text_joined if resp_text_joined.strip() else (req_text_joined if req_text_joined.strip() else job_description)
+        req_text = req_text_joined if req_text_joined.strip() else (resp_text_joined if resp_text_joined.strip() else job_description)
 
         job_title_emb = self._get_job_embedding(job_data, "title_vector", job_title)
         job_req_emb = self._get_job_embedding(job_data, "requirements_vector", req_text)
@@ -316,9 +327,13 @@ class ArchetypeManager:
 
             if job_req_emb is not None and neg_arch.requirements_embedding is not None:
                 req_sim = self.vector_engine.compute_similarity(job_req_emb, neg_arch.requirements_embedding)
+            elif job_resp_emb is not None and neg_arch.requirements_embedding is not None:
+                req_sim = self.vector_engine.compute_similarity(job_resp_emb, neg_arch.requirements_embedding)
 
             if job_resp_emb is not None and neg_arch.responsibilities_embedding is not None:
                 resp_sim = self.vector_engine.compute_similarity(job_resp_emb, neg_arch.responsibilities_embedding)
+            elif job_req_emb is not None and neg_arch.responsibilities_embedding is not None:
+                resp_sim = self.vector_engine.compute_similarity(job_req_emb, neg_arch.responsibilities_embedding)
 
             # Title similarity heavily signals role alignment; responsibilities signal duties
             combined_neg_sim = max(

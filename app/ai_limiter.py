@@ -270,10 +270,10 @@ class AILimiter:
         from app.ai_engine import RateLimitError
         import random
 
-        backoff = 2.0  # start with 2 seconds backoff for rate limits
-        max_backoff = 60.0
+        backoff = float(os.getenv("AI_INITIAL_BACKOFF", "2.0"))
+        max_backoff = float(os.getenv("AI_MAX_BACKOFF", "60.0"))
         rate_retries = 0
-        max_rate_retries = 6
+        max_rate_retries = int(os.getenv("AI_MAX_RATE_RETRIES", "6"))
 
         general_retries = 0
         max_general_retries = int(os.getenv("AI_MAX_RETRIES", "2"))
@@ -312,37 +312,53 @@ class AILimiter:
                 
                 return res
 
-            except RateLimitError as e:
-                rate_retries += 1
-                print(f"\n[RateLimiter] [DEBUG] Rate limit error on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count for request: {est_tokens}")
-                if rate_retries > max_rate_retries:
-                    print(f"\n[RateLimiter] Maximum retries ({max_rate_retries}) reached for rate limit (Input tokens: {est_tokens}). Propagating error: {e}")
-                    raise
-
-                # Adjust the rate limit dynamically on the limiter to throttle future requests!
-                async with self.lock:
-                    if not hasattr(self, "_original_delay"):
-                        self._original_delay = self.delay
-                    self._throttled = True
-                    old_delay = self.delay
-                    # Settle on a slower rate: double the delay (halve the RPM)
-                    self.delay = max(1.0, self.delay * 2.0)
-                    print(f"\n[RateLimiter] 429 Rate Limit encountered. Adjusting rate limit delay from {old_delay:.2f}s to {self.delay:.2f}s (Throttle applied)")
-
-                # Sleep with exponential backoff + jitter
-                sleep_time = backoff + (random.random() * 0.5 * backoff)
-                print(f"\n[RateLimiter] Rate limit error: {e} (Input tokens: {est_tokens}). Retrying {rate_retries}/{max_rate_retries} in {sleep_time:.2f}s...")
-                await asyncio.sleep(sleep_time)
-                backoff = min(max_backoff, backoff * 2.0)
-
             except Exception as e:
-                general_retries += 1
-                print(f"\n[RateLimiter] [DEBUG] AI processing error on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count for request: {est_tokens}")
-                if general_retries > max_general_retries:
-                    print(f"\n[RateLimiter] Maximum retries ({max_general_retries}) reached for error: {e} (Input tokens: {est_tokens}). Propagating error.")
-                    raise
-                print(f"\n[RateLimiter] AI processing error: {e} (Input tokens: {est_tokens}). Retrying attempt {general_retries}/{max_general_retries} in {retry_delay:.1f}s...")
-                await asyncio.sleep(retry_delay)
+                from app.ai_engine import is_rate_limit_exception, is_transient_ai_exception, RateLimitError
+
+                is_rate_limit = isinstance(e, RateLimitError) or is_rate_limit_exception(e)
+                is_transient = is_rate_limit or is_transient_ai_exception(e)
+
+                if is_transient:
+                    rate_retries += 1
+                    err_type = "Rate limit (429)" if is_rate_limit else "Transient server overload (503/server error)"
+                    print(f"\n[RateLimiter] [DEBUG] {err_type} on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count: {est_tokens}")
+                    if rate_retries > max_rate_retries:
+                        print(f"\n[RateLimiter] Maximum retries ({max_rate_retries}) reached for {err_type} (Input tokens: {est_tokens}). Propagating error: {e}")
+                        raise
+
+                    # Adjust the rate limit dynamically on the limiter to throttle future requests!
+                    async with self.lock:
+                        if not hasattr(self, "_original_delay"):
+                            self._original_delay = self.delay
+                        self._throttled = True
+                        old_delay = self.delay
+                        # Settle on a slower rate: double the delay (halve the RPM)
+                        self.delay = max(1.0, self.delay * 2.0)
+                        print(f"\n[RateLimiter] {err_type} encountered. Adjusting rate limit delay from {old_delay:.2f}s to {self.delay:.2f}s (Throttle applied)")
+
+                    # Parse suggested retry delay if provided by the SDK (e.g. Gemini RetryInfo '5s' or 'retry in 5.08s')
+                    suggested_delay = None
+                    import re
+                    retry_match = re.search(r"retry in (\d+(?:\.\d+)?)s", str(e), re.IGNORECASE) or re.search(r"retryDelay': '(\d+)s'", str(e))
+                    if retry_match:
+                        try:
+                            suggested_delay = float(retry_match.group(1)) + 1.0
+                        except ValueError:
+                            pass
+
+                    # Sleep with exponential backoff + jitter (or suggested delay)
+                    sleep_time = suggested_delay if suggested_delay else (backoff + (random.random() * 0.5 * backoff))
+                    print(f"\n[RateLimiter] {err_type}: {e} (Input tokens: {est_tokens}). Retrying {rate_retries}/{max_rate_retries} in {sleep_time:.2f}s...")
+                    await asyncio.sleep(sleep_time)
+                    backoff = min(max_backoff, backoff * 2.0)
+                else:
+                    general_retries += 1
+                    print(f"\n[RateLimiter] [DEBUG] AI processing error on request for stage '{self.stage_name}' (provider: '{self.provider_name}'). Input token count for request: {est_tokens}")
+                    if general_retries > max_general_retries:
+                        print(f"\n[RateLimiter] Maximum retries ({max_general_retries}) reached for error: {e} (Input tokens: {est_tokens}). Propagating error.")
+                        raise
+                    print(f"\n[RateLimiter] AI processing error: {e} (Input tokens: {est_tokens}). Retrying attempt {general_retries}/{max_general_retries} in {retry_delay:.1f}s...")
+                    await asyncio.sleep(retry_delay)
 
 
 

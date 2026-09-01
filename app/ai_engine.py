@@ -30,6 +30,23 @@ def is_rate_limit_exception(e: Exception) -> bool:
         return True
     return False
 
+def is_transient_ai_exception(e: Exception) -> bool:
+    """Returns True if the exception is a 429 rate limit, 503 service unavailable, or transient server overload."""
+    if is_rate_limit_exception(e):
+        return True
+    err_str = str(e).lower()
+    cls_name = e.__class__.__name__.lower()
+    if any(k in cls_name for k in ("unavailable", "serviceunavailable", "internalservererror", "badgateway", "gatewaytimeout")):
+        return True
+    transient_keywords = (
+        "503", "502", "504", "500", "unavailable", "high demand", "overloaded",
+        "spikes in demand", "temporarily unavailable", "try again later",
+        "connection reset", "connection refused", "timeout", "timed out"
+    )
+    if any(k in err_str for k in transient_keywords):
+        return True
+    return False
+
 def parse_json_from_llm(content: str) -> dict:
     """Parses JSON content returned by LLMs, handling thinking blocks, markdown code blocks, and raw text."""
     if not content:

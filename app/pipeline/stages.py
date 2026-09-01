@@ -372,8 +372,8 @@ async def pipeline_stage_preliminary_filter(jobs: List[Dict], user_preferences: 
     """
     Stage 1.5: Early disqualification via hard rule filters before AI extraction & embedding pass.
     
-    Filters jobs based on deterministic fields (work_type, seniority, pay, timezone, location).
-    Jobs that fail are marked skip=True and excluded from Stage 2 AI processing.
+    Filters jobs based on deterministic fields (job title disqualifier regex, work_type, seniority, pay, timezone, location).
+    Jobs that fail are marked skip=True in the database and excluded from Stage 2 AI processing memory.
     """
     print("=" * 50)
     print("PIPELINE STAGE 1.5: PRELIMINARY RULE FILTERING (EARLY DISQUALIFICATION)")
@@ -411,6 +411,8 @@ async def pipeline_stage_preliminary_filter(jobs: List[Dict], user_preferences: 
                 'timezone': text_processor.detect_timezone(desc),
             }
             job['features'] = features
+        elif not features.get('title'):
+            features['title'] = sanitize_untrusted_text(job.get('title', job.get('job_name', '')))
 
         is_skipped = apply_rule_filters(job, user_preferences)
         job['skip'] = is_skipped
@@ -787,6 +789,9 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
 
                 # Post-validate extracted features before saving to DB
                 job['features'] = validate_and_clean_extracted_data(features)
+            except Exception as e:
+                title = job.get('features', {}).get('title', 'Unknown') if isinstance(job, dict) else 'Unknown'
+                print(f"\n[Stage 2 Extraction Warning] Failed extraction for job '{title}' (Index: {index}): {e}. Retaining basic features.")
             finally:
                 await tracker.increment()
 
@@ -863,15 +868,25 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
 
                 # Batch vector generation
                 title_text = str(features.get('title') or '')
+                summary_text = str(features.get('summary') or features.get('description') or '')
+                description_text = str(features.get('description') or features.get('summary') or '')
+
                 reqs_list = features.get('requirements') or []
-                requirements_text = "\n• ".join(str(r) for r in reqs_list if r) if isinstance(reqs_list, list) else str(reqs_list)
+                requirements_text = "\n• ".join(str(r) for r in reqs_list if r) if isinstance(reqs_list, list) else str(reqs_list or '')
                 if requirements_text and isinstance(reqs_list, list):
                     requirements_text = "• " + requirements_text
+
                 resps_list = features.get('responsibilities') or []
-                responsibilities_text = "\n• ".join(str(r) for r in resps_list if r) if isinstance(resps_list, list) else str(resps_list)
+                responsibilities_text = "\n• ".join(str(r) for r in resps_list if r) if isinstance(resps_list, list) else str(resps_list or '')
                 if responsibilities_text and isinstance(resps_list, list):
                     responsibilities_text = "• " + responsibilities_text
-                summary_text = str(features.get('summary') or '')
+
+                # Empty fallbacks: ensure requirements and responsibilities do not embed empty strings
+                if not requirements_text.strip():
+                    requirements_text = responsibilities_text if responsibilities_text.strip() else (summary_text if summary_text.strip() else description_text)
+
+                if not responsibilities_text.strip():
+                    responsibilities_text = requirements_text if requirements_text.strip() else (summary_text if summary_text.strip() else description_text)
 
                 pay_val = features.get('pay') or features.get('pay_rate') or ''
                 pay_text = f"Pay Range: {pay_val}" if pay_val else ''
@@ -904,6 +919,9 @@ async def pipeline_stage_embed_and_extract(jobs: List[Dict], ai_engine: Optional
                         job['embeddings']['description_vector'] = vectors[3]
                         job['embeddings']['pay_vector'] = vectors[4]
                         job['embeddings']['location_vector'] = vectors[5]
+            except Exception as e:
+                title = job.get('features', {}).get('title', 'Unknown') if isinstance(job, dict) else 'Unknown'
+                print(f"\n[Stage 2 Embedding Warning] Failed embedding generation for job '{title}' (Index: {idx}): {e}. Skipping vectors for this job.")
             finally:
                 await embedding_tracker.increment()
 
@@ -1330,11 +1348,22 @@ async def pipeline_stage_vector_scoring(jobs: List[Dict], archetype_manager: Opt
         requirements_similarity = best_match.get('requirements_similarity', 0.0)
         responsibility_similarity = best_match.get('responsibility_similarity', 0.0)
 
+        # Fallback handling for similarity scores when one component is missing or 0.0
+        eff_req_sim = requirements_similarity
+        eff_resp_sim = responsibility_similarity
+        if eff_req_sim <= 0.0 and eff_resp_sim > 0.0:
+            eff_req_sim = eff_resp_sim
+        elif eff_resp_sim <= 0.0 and eff_req_sim > 0.0:
+            eff_resp_sim = eff_req_sim
+        elif eff_req_sim <= 0.0 and eff_resp_sim <= 0.0:
+            eff_req_sim = title_similarity
+            eff_resp_sim = title_similarity
+
         # Weighted positive semantic score
         positive_score = (
             0.40 * title_similarity +
-            0.35 * requirements_similarity +
-            0.25 * responsibility_similarity
+            0.35 * eff_req_sim +
+            0.25 * eff_resp_sim
         )
 
         # Apply negative vector score penalty if configured
@@ -1368,8 +1397,10 @@ async def pipeline_stage_vector_scoring(jobs: List[Dict], archetype_manager: Opt
 
         semantic_score = positive_score - negative_penalty
 
-        # Keyword adjustments
+        # Keyword adjustments (fallback to responsibilities or summary if requirements is empty)
         job_requirements = job.get('features', {}).get('requirements', [])
+        if not job_requirements:
+            job_requirements = job.get('features', {}).get('responsibilities', []) or [job.get('features', {}).get('summary', '')]
         job_title = job.get('features', {}).get('title', '')
         semantic_score = apply_keyword_adjustments(semantic_score, job_requirements, job_title)
 

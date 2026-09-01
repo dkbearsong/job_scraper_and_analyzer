@@ -154,8 +154,14 @@ class MicroserviceAdapter(ScraperAdapter):
         self, payload: Dict[str, Any], api_method: str
     ) -> Dict[str, Any]:
         """Call the local microservice with the given payload."""
-        url = f"{self._microservice_host}:{self._microservice_port}/{api_method}"
-        timeout = aiohttp.ClientTimeout(total=self._timeout)
+        sock_read_timeout = int(os.getenv("MICROSERVICE_SOCK_READ_TIMEOUT", "90"))
+        connect_timeout = int(os.getenv("MICROSERVICE_CONNECT_TIMEOUT", "30"))
+        timeout = aiohttp.ClientTimeout(
+            total=None,
+            connect=connect_timeout,
+            sock_connect=connect_timeout,
+            sock_read=sock_read_timeout,
+        )
 
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:

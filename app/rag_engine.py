@@ -219,14 +219,14 @@ class RAGEngine:
             VALUES (%s, %s, %s, %s::vector, %s::jsonb);
             """
             try:
-                self.dp.conn.execute_sql(insert_sql, (job_id, chunk_type, content, emb_str, json.dumps(meta_payload)))
+                self.dp.conn.execute_sql(insert_sql, (job_id, chunk_type, content, emb_str, json.dumps(meta_payload, default=str)))
             except Exception as e:
                 # Fallback if vector cast fails
                 fallback_sql = """
                 INSERT INTO rag_documents (job_id, chunk_type, content, metadata)
                 VALUES (%s, %s, %s, %s::jsonb);
                 """
-                self.dp.conn.execute_sql(fallback_sql, (job_id, chunk_type, content, json.dumps(meta_payload)))
+                self.dp.conn.execute_sql(fallback_sql, (job_id, chunk_type, content, json.dumps(meta_payload, default=str)))
 
         return True
 
@@ -255,13 +255,13 @@ class RAGEngine:
             VALUES (NULL, %s, %s, %s::vector, %s::jsonb);
             """
             try:
-                self.dp.conn.execute_sql(insert_sql, (source_label, chunk, emb_str, json.dumps(meta_payload)))
+                self.dp.conn.execute_sql(insert_sql, (source_label, chunk, emb_str, json.dumps(meta_payload, default=str)))
             except Exception:
                 fallback_sql = """
                 INSERT INTO rag_documents (job_id, chunk_type, content, metadata)
                 VALUES (NULL, %s, %s, %s::jsonb);
                 """
-                self.dp.conn.execute_sql(fallback_sql, (source_label, chunk, json.dumps(meta_payload)))
+                self.dp.conn.execute_sql(fallback_sql, (source_label, chunk, json.dumps(meta_payload, default=str)))
 
         return True
 
@@ -310,7 +310,7 @@ class RAGEngine:
             sql_query = f"""
             SELECT 
                 rd.id, rd.job_id, rd.chunk_type, rd.content, rd.metadata,
-                0.5 AS distance,
+                0.5::float AS distance,
                 j.job_name, c.company_name, j.link
             FROM rag_documents rd
             LEFT JOIN job j ON rd.job_id = j.id
@@ -332,6 +332,11 @@ class RAGEngine:
                         "metadata": r[4], "distance": r[5], "job_name": r[6],
                         "company_name": r[7], "link": r[8]
                     }
+                if row_dict.get("distance") is not None:
+                    try:
+                        row_dict["distance"] = float(row_dict["distance"])
+                    except (ValueError, TypeError):
+                        pass
                 row_dict["similarity"] = round(1.0 - float(row_dict.get("distance", 0.5)), 4)
                 results.append(row_dict)
             return results

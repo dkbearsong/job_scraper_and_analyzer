@@ -22,3 +22,4 @@ scratch/
 site_strategies/
 tests/
 tests/__pycache__/
+ai_review/

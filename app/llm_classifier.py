@@ -121,6 +121,7 @@ RULES:
 - Return ONLY valid JSON
 - No explanations, no chain-of-thought
 - Be critical and thorough
+- Exclude location alignment, remote/hybrid status, timezone, and relocation from recruiter_red_flags. Do NOT flag location or remote mismatches as red flags. If there are location/hybrid/relocation considerations, include them as actionable suggestions in tailoring_notes.
 
 JSON Output Schema:
 {
@@ -157,12 +158,11 @@ JSON Output Schema:
   "recruiter_red_flags": {
     "flags_found": {
       "tenure_instability": false,
-      "location_or_remote_mismatch": true,
       "massive_role_downgrade": false,
       "critical_seniority_gap": false
     },
     "flag_details": [
-      "Candidate is located in NY but role is hybrid in San Francisco."
+      "Candidate has multiple short tenures under 6 months without explanation."
     ]
   },
   "driving_points": [
@@ -170,7 +170,8 @@ JSON Output Schema:
   ],
   "tailoring_notes": [
     "Highlight Webpack optimization techniques if applicable",
-    "Emphasize the scale of traffic managed at Shopify"
+    "Emphasize the scale of traffic managed at Shopify",
+    "Address location alignment or willingness to relocate / work hybrid in San Francisco"
   ],
   "recruiter_bait_likelihood": "high",
   "detailed_fit_analysis": "The candidate perfectly matches the tech stack, exceeds the experience requirement, and brings elite domain expertise."
@@ -210,14 +211,14 @@ Detailed instructions for categories:
      * "HIGH_RAMP_UP_FRICTION": e.g. AdTech to MedTech or Gaming to FinTech.
    - justification: Explanation of domain transition cost.
 8. recruiter_red_flags:
-   - flags_found: A dictionary with boolean values for each of the following flags (MUST have all 4 keys):
+   - flags_found: A dictionary with boolean values for each of the following flags (MUST have all 3 keys):
      * tenure_instability: true if candidate has short tenures or significant gaps.
-     * location_or_remote_mismatch: true if hybrid/remote location does not match candidate location.
      * massive_role_downgrade: true if candidate is significantly overqualified.
      * critical_seniority_gap: true if candidate is significantly underqualified.
+     (NOTE: Exclude location alignment, remote/hybrid status, timezone, and relocation from red flags entirely; address location considerations in tailoring_notes instead).
    - flag_details: A list of string descriptions for any red flags found (empty list if none).
 9. driving_points: A list of strong selling points that would pitch the candidate effectively.
-10. tailoring_notes: Specific suggestions for tailoring the candidate's resume/profile to this JD.
+10. tailoring_notes: Specific suggestions for tailoring the candidate's resume/profile to this JD (including location/relocation/remote notes if applicable).
 11. recruiter_bait_likelihood: Likelihood of immediately catching a recruiter's eye. MUST be one of: "high", "medium", "low".
 12. detailed_fit_analysis: A detailed overall analysis of candidate-job fit.
 
@@ -1003,7 +1004,6 @@ class StrongLLMReranker:
             "recruiter_red_flags": {
                 "flags_found": {
                     "tenure_instability": False,
-                    "location_or_remote_mismatch": False,
                     "massive_role_downgrade": False,
                     "critical_seniority_gap": False
                 },
@@ -1121,7 +1121,6 @@ class StrongLLMReranker:
         flags = validated["recruiter_red_flags"]["flags_found"]
         validated["recruiter_red_flags"]["flags_found"] = _validate_dict(flags, {
             "tenure_instability": (bool, False),
-            "location_or_remote_mismatch": (bool, False),
             "massive_role_downgrade": (bool, False),
             "critical_seniority_gap": (bool, False)
         })
@@ -1343,6 +1342,10 @@ async def process_stage_6(jobs: List[Dict], classifier: CheapLLMClassifier,
                 est_tokens=est_tokens
             )
             job['cheap_llm_result'] = result
+        except Exception as e:
+            title = job.get('features', {}).get('title', 'Unknown') if isinstance(job, dict) else 'Unknown'
+            print(f"\n[Stage 6 Warning] Cheap LLM classification failed for job '{title}' (ID: {job.get('id', 'N/A')}): {e}. Using default result.")
+            job['cheap_llm_result'] = classifier._default_result()
         finally:
             await tracker.increment()
             
@@ -1389,6 +1392,10 @@ async def process_stage_7(jobs: List[Dict], reranker: StrongLLMReranker,
                 est_tokens=est_tokens
             )
             job['strong_llm_result'] = result
+        except Exception as e:
+            title = job.get('features', {}).get('title', 'Unknown') if isinstance(job, dict) else 'Unknown'
+            print(f"\n[Stage 7 Warning] Strong LLM reranking failed for job '{title}' (ID: {job.get('id', 'N/A')}): {e}. Using default result.")
+            job['strong_llm_result'] = reranker._default_result()
         finally:
             await tracker.increment()
             

@@ -270,7 +270,7 @@ def format_host_server_error_report() -> str:
 
 def _is_js_request(args, kwargs) -> bool:
     api_method = kwargs.get("api_method", "")
-    if api_method == "extract-js":
+    if api_method in ("extract-js", "extract-paginated"):
         return True
     
     # Check payload if present
@@ -278,10 +278,38 @@ def _is_js_request(args, kwargs) -> bool:
         payload = args[0]
         if payload.get("js_config") is not None:
             return True
-        if payload.get("pagination", {}).get("use_js") is True:
+        if payload.get("pagination") is not None:
             return True
             
     return False
+
+
+def classify_strategy_type(strategy: dict, api_method: str = "") -> str:
+    """
+    Verify and classify a scraping strategy profile into one of:
+    - 'non-javascript': Single static HTML page (no JS, no pagination, single URL)
+    - 'javascript': Single JS-rendered page (uses JS, no pagination, single URL)
+    - 'paginated': Paginated search/board (multi-page, single starting URL)
+    - 'multi-link': Multiple starting URLs (URL list with > 1 URLs)
+
+    Queue priority order: [non-javascript, javascript, paginated, multi-link]
+    """
+    urls = strategy.get("url")
+    if isinstance(urls, list) and len(urls) > 1:
+        return "multi-link"
+
+    if strategy.get("pagination") is not None or api_method == "extract-paginated":
+        return "paginated"
+
+    is_js = (
+        api_method == "extract-js"
+        or strategy.get("js_config") is not None
+        or (strategy.get("pagination") and strategy.get("pagination", {}).get("use_js"))
+    )
+    if is_js:
+        return "javascript"
+
+    return "non-javascript"
 
 
 async def _request_with_domain_backoff(
@@ -511,7 +539,6 @@ async def scrape_sites(
     host = os.getenv("SCRAPER_HOST", "localhost")
     port = os.getenv("SCRAPER_PORT", "5052")
     endpoint = f"http://{host}:{port}/{api_method}"
-
     try:
         new_data = await _request_with_domain_backoff(
             dp.scrape_data,
@@ -519,6 +546,20 @@ async def scrape_sites(
             url=strategy_url,
             api_method=api_method,
         )
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        record_host_server_error(
+            company=company_name,
+            endpoint=endpoint,
+            target_url=strategy_url,
+            status_code="408",
+            error=f"Scraping request timed out after {micro_timeout}s",
+            exception="asyncio.TimeoutError",
+            stage="Part A (Company Board)"
+        )
+        print(f"Scraping timed out for {company_name} after {micro_timeout}s. URL: {strategy_url} (Continuing with remaining strategies...)")
+        return None
     except Exception as e:
         record_host_server_error(
             company=company_name,
@@ -949,7 +990,7 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         domain_to_jobs[domain].append(job)
 
     async def scrape_single_db_job(job: dict):
-        nonlocal updated_count
+        nonlocal updated_count, processed_count
         db_id = job["db_id"]
         url = job["url"]
         source = job.get("source", "")
@@ -1069,13 +1110,17 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
 
         description = ""
         parsed_pay = ""
+        micro_timeout = int(os.getenv("MICROSERVICE_TIMEOUT", "500"))
         async with global_semaphore:
             try:
-                result = await _request_with_domain_backoff(
-                    dp.scrape_data,
-                    payload,
-                    url=url,
-                    api_method=api_method,
+                result = await asyncio.wait_for(
+                    _request_with_domain_backoff(
+                        dp.scrape_data,
+                        payload,
+                        url=url,
+                        api_method=api_method,
+                    ),
+                    timeout=micro_timeout,
                 )
                 if result.get("status_code") == 200 and result.get("data"):
                     data_result = result["data"]
@@ -1446,21 +1491,15 @@ async def _pipeline_stage_scrape_legacy(
 
     if not skip_part_a:
         print("--- Company Board Scraping ---")
-        site_strategies: list = []
+        site_strategies_raw: list = []
 
         for i in range(len(sites.get("name", []))):
             strategy_path = f"./site_strategies/{sites['name'][i]}.json"
             if not os.path.exists(strategy_path):
                 print(f"Warning: strategy file not found: {strategy_path}")
                 continue
-            strategy = {
-                "company": sites["name"][i],
-                "site": sites["site"][i],
-                "strategy": dp.load_site_strategies(strategy_path),
-                "api_method": "",
-            }
-            strat = strategy["strategy"]
-            strategy["api_method"] = (
+            strat = dp.load_site_strategies(strategy_path)
+            api_method = (
                 "extract-paginated"
                 if strat.get("pagination") is not None
                 else (
@@ -1469,35 +1508,73 @@ async def _pipeline_stage_scrape_legacy(
                     else "extract"
                 )
             )
+            cat = classify_strategy_type(strat, api_method)
+            strategy = {
+                "company": sites["name"][i],
+                "site": sites["site"][i],
+                "strategy": strat,
+                "api_method": api_method,
+                "category": cat,
+            }
             if verbose:
                 print(
                     f"Company: {strategy['company']} | "
-                    f"API method: {strategy['api_method']}"
+                    f"API method: {strategy['api_method']} | "
+                    f"Category: {strategy['category']}"
                 )
-            site_strategies.append(strategy)
-        print(f"Loaded {len(site_strategies)} site strategies.")
+            site_strategies_raw.append(strategy)
+
+        # Organize into queue priority: [non-javascript, javascript, paginated, multi-link]
+        ordered_types = ["non-javascript", "javascript", "paginated", "multi-link"]
+        categories = {cat: [] for cat in ordered_types}
+        for s in site_strategies_raw:
+            cat = s.get("category", "non-javascript")
+            categories[cat].append(s)
+
+        site_strategies = []
+        for cat in ordered_types:
+            site_strategies.extend(categories[cat])
+
+        print(f"Loaded {len(site_strategies)} site strategies organized by queue priority:")
+        for cat in ordered_types:
+            companies = [s["company"] for s in categories[cat]]
+            if companies:
+                print(f"  - [{cat.upper()}] ({len(companies)}): {', '.join(companies)}")
 
         concurrency = user_preferences.get("scraper_concurrency", 5)
-        global_semaphore = asyncio.Semaphore(int(os.getenv("SCRAPER_CONCURRENCY", concurrency)))
+        static_semaphore = asyncio.Semaphore(int(os.getenv("SCRAPER_CONCURRENCY", concurrency)))
 
         async def scrape_strategy(strat_item):
             company_name = strat_item.get("company", "Unknown")
-            start_time = time_module.time()
+            queue_start_time = time_module.time()
             try:
                 company_url = strat_item["strategy"].pop("company_url", None)
                 results_local = []
                 urls = strat_item["strategy"]["url"]
                 
+                # Check if this strategy is JS-based or static HTML
+                is_js = _is_js_request([strat_item.get("strategy", {})], {"api_method": strat_item.get("api_method", "")})
+
                 # If strategy url is a list, process them sequentially for this company to avoid hitting them too fast
                 if isinstance(urls, list):
                     print(f"Scraping {company_name} ({len(urls)} URLs)...")
                     consecutive_failures = 0
+                    first_scrape_start = None
                     for idx, url_val in enumerate(urls):
                         new_payload = dict(strat_item)
                         new_payload["strategy"] = dict(strat_item["strategy"])
                         new_payload["strategy"]["url"] = url_val
-                        async with global_semaphore:
+                        
+                        # Only static requests use static_semaphore; JS requests serialize via _js_scrape_lock
+                        if is_js:
+                            if first_scrape_start is None:
+                                first_scrape_start = time_module.time()
                             d = await scrape_sites(new_payload, company_url, dp)
+                        else:
+                            async with static_semaphore:
+                                if first_scrape_start is None:
+                                    first_scrape_start = time_module.time()
+                                d = await scrape_sites(new_payload, company_url, dp)
                         if d:
                             consecutive_failures = 0
                             if isinstance(d, list):
@@ -1509,21 +1586,28 @@ async def _pipeline_stage_scrape_legacy(
                             if consecutive_failures >= 2 and (idx + 1) < len(urls):
                                 print(f"  [{company_name}] Encountered {consecutive_failures} consecutive failures/timeouts. Skipping remaining {len(urls) - (idx + 1)} URLs to prevent stalling.")
                                 break
+                    scrape_start = first_scrape_start or queue_start_time
                 else:
                     print(f"Scraping {company_name}...")
-                    async with global_semaphore:
+                    if is_js:
+                        scrape_start = time_module.time()
                         d = await scrape_sites(strat_item, company_url, dp)
+                    else:
+                        async with static_semaphore:
+                            scrape_start = time_module.time()
+                            d = await scrape_sites(strat_item, company_url, dp)
                     if d:
                         if isinstance(d, list):
                             results_local.extend(d)
                         else:
                             results_local.append(d)
-                elapsed = time_module.time() - start_time
-                print(f"Finished {company_name} in {elapsed:.1f}s ({len(results_local)} jobs scraped).")
+                scrape_duration = time_module.time() - scrape_start
+                queue_wait = scrape_start - queue_start_time
+                print(f"Finished {company_name} in {scrape_duration:.1f}s (queued: {queue_wait:.1f}s, {len(results_local)} jobs scraped).")
                 return results_local
             except Exception as e:
-                elapsed = time_module.time() - start_time
-                print(f"Error scraping strategy for {company_name} after {elapsed:.1f}s: {e}. Continuing with remaining strategies...")
+                total_elapsed = time_module.time() - queue_start_time
+                print(f"Error scraping strategy for {company_name} after {total_elapsed:.1f}s: {e}. Continuing with remaining strategies...")
                 host = os.getenv("SCRAPER_HOST", "localhost")
                 port = os.getenv("SCRAPER_PORT", "5052")
                 record_host_server_error(
@@ -1537,15 +1621,35 @@ async def _pipeline_stage_scrape_legacy(
                 )
                 return []
 
-        tasks = [scrape_strategy(strat) for strat in site_strategies]
-        scraped_lists = await asyncio.gather(*tasks, return_exceptions=True)
-        for sublist in scraped_lists:
-            if isinstance(sublist, Exception):
-                print(f"Strategy task raised an exception: {sublist}. Continuing...")
-            elif isinstance(sublist, list):
-                data.extend(sublist)
+        # Execute queue category by category: [non-javascript, javascript, paginated, multi-link]
+        for cat in ordered_types:
+            cat_strategies = categories[cat]
+            if not cat_strategies:
+                continue
 
-        print(f"Total jobs scraped from company boards: {len(data)}")
+            print(f"\n--- Scraping [{cat.upper()}] Strategies ({len(cat_strategies)}) ---")
+            if cat == "non-javascript":
+                # Static HTML profiles are fast and safe to run concurrently in parallel
+                cat_tasks = [scrape_strategy(strat) for strat in cat_strategies]
+                cat_results = await asyncio.gather(*cat_tasks, return_exceptions=True)
+                for sublist in cat_results:
+                    if isinstance(sublist, Exception):
+                        print(f"Strategy task raised an exception: {sublist}. Continuing...")
+                    elif isinstance(sublist, list):
+                        data.extend(sublist)
+            else:
+                # Browser-driven profiles (javascript, paginated, multi-link) require headless browser
+                # resources on the crawler microservice; execute them sequentially to eliminate lock pile-up,
+                # distorted timer accumulation, and socket contention.
+                for strat in cat_strategies:
+                    try:
+                        res = await scrape_strategy(strat)
+                        if isinstance(res, list):
+                            data.extend(res)
+                    except Exception as e:
+                        print(f"Strategy task for {strat.get('company')} raised an exception: {e}. Continuing...")
+
+        print(f"\nTotal jobs scraped from company boards: {len(data)}")
 
         # ── Load jobs into the database first (before scraping descriptions) ──
         if data and not skip_db:
