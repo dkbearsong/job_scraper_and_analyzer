@@ -324,8 +324,9 @@ python main.py
 | `--pages` | int | `None` | Override max scraping pages per site for Stage 1. |
 | `--visible` | flag | `False` | Shows browser window during browser-based scraping (disables headless). |
 | `--skip-part-a` | flag | `False` | Skips company career-page scraping in the legacy fallback path. |
+| `--skip-job-boards` / `--scrape-descriptions-only` | flag | `False` | Skips adapter and company board scraping in Stage 1, starting directly from scraping job descriptions from DB, and continues through the rest of the pipeline. |
 | `--scrape-missing-24h` | flag | `False` | At Stage 1, only re-scrapes descriptions for jobs from the last 24h that lack them. |
-| `--reprocess` | int/flag | `0` | Clears database extractions and scores for the specified number of days (default: 1 day if flag is given without a value) to allow re-running stages. |
+| `--reprocess` | str/int/flag | `None` | Clears downstream database records starting at a specific stage (e.g. `--reprocess 7`, `--reprocess 6`, `--reprocess 2`) for jobs pulled for that day and resets the `skip` flag to NULL so stages can be re-run cleanly. |
 | `--recalculate-final-scores` | flag | `False` | Re-evaluates final scores and priority rankings from stored database scores without re-running models. |
 | `--rag-query` | str | `None` | Executes a natural language query over the pgvector job corpus and prints an answer with citations. |
 | `--rag-tailor` | int | `None` | Generates a tailored resume and application talking points for a specific Job ID. |
@@ -335,6 +336,9 @@ python main.py
 ```bash
 # Run the full pipeline
 python main.py
+
+# Skip job boards, start directly by scraping job descriptions for DB jobs, and run the rest of the pipeline
+python main.py --skip-job-boards
 
 # Run only rule filtering (Stage 3) with verbose output
 python main.py -s 3 --verbose
@@ -348,8 +352,14 @@ python main.py --skip-db
 # Scrape jobs with a visible browser window and debug logging
 python main.py -s 1 --visible --debug
 
-# Reprocess and re-evaluate jobs from the last 7 days
-python main.py --reprocess 7 -s 2-8
+# Reprocess jobs starting at Stage 7 (Strong LLM) and re-run Stages 7-8
+python main.py --reprocess 7 -s 7-8
+
+# Reprocess jobs starting at Stage 6 (Cheap LLM) and re-run Stages 6-8
+python main.py --reprocess 6 -s 6-8
+
+# Reprocess jobs starting at Stage 2 (Embed+Extract) and re-run Stages 2-8
+python main.py --reprocess 2 -s 2-8
 
 # Recalculate final application queue scores after tuning weights in user_preferences.yaml
 python main.py --recalculate-final-scores

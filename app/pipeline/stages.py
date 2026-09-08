@@ -149,7 +149,8 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
                                 debug_logging: bool = False,
                                 skip_part_a: Optional[bool] = None,
                                 db_limit: int = 50,
-                                scrape_missing_24h: bool = False) -> List[Dict]:
+                                scrape_missing_24h: bool = False,
+                                skip_job_boards: bool = False) -> List[Dict]:
     """
     Stage 1: Scrape jobs using the pluggable adapter system.
 
@@ -167,6 +168,7 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         skip_part_a: If True, skip Part A in legacy fallback path.
         db_limit: Max records to pull from DB in bulk-load fallback operations.
         scrape_missing_24h: If True, only re-scrape descriptions for recent DB jobs.
+        skip_job_boards: If True, skip all adapter and company board scraping and start directly from scraping job descriptions.
 
     Returns:
         List[Dict] of scraped jobs in the 'processed_job_pool' format.
@@ -195,11 +197,11 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
     # Determine config path (check env var first, then default)
     scrapers_config_path = os.getenv("SCRAPERS_CONFIG", "scrapers_config.yaml")
 
-    # ── Attempt adapter-based scraping ──
+    # ── Attempt adapter-based scraping (skipped if skip_job_boards is True) ──
     all_scraped: List[Dict] = []
     used_adapters = False
 
-    if os.path.exists(scrapers_config_path):
+    if not skip_job_boards and os.path.exists(scrapers_config_path):
         try:
             loader = AdapterLoader(config_path=scrapers_config_path, verbose=verbose)
             loader.load_config()
@@ -235,25 +237,28 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
     # CLI --skip-part-a overrides yaml value; if neither is set, default to False
     resolved_skip_part_a = (
         True
-        if skip_part_a is True
+        if (skip_part_a is True or skip_job_boards is True)
         else bool(user_preferences.get("skip_part_a", False))
     )
 
-    # ── Fallback to legacy path if adapters didn't run ──
-    if not used_adapters:
-        if not os.path.exists(scrapers_config_path):
+    # ── Fallback to legacy path if adapters didn't run or if skipping job boards ──
+    if skip_job_boards or not used_adapters:
+        if skip_job_boards:
+            reason = "skipping job boards to start directly from DB description scraping"
+        elif not os.path.exists(scrapers_config_path):
             reason = f"no {scrapers_config_path} found"
         else:
             reason = f"no enabled adapters loaded from {scrapers_config_path} or adapter run failed"
         all_scraped = await _pipeline_stage_scrape_legacy(
             dp, user_preferences, sites, skip_db, verbose,
-            enable_part_b=enable_part_b, skip_part_a=resolved_skip_part_a,
+            enable_part_b=False if skip_job_boards else enable_part_b,
+            skip_part_a=resolved_skip_part_a,
             db_limit=db_limit,
             reason=reason,
         )
 
     # ── Also run fallback if explicitly configured to do so ──
-    if used_adapters and _check_run_fallback_flag(scrapers_config_path):
+    if not skip_job_boards and used_adapters and _check_run_fallback_flag(scrapers_config_path):
         print("run_fallback_after_adapters is True — also running legacy fallback scraping...")
         fallback_jobs = await _pipeline_stage_scrape_legacy(
             dp, user_preferences, sites, skip_db, verbose,
@@ -278,11 +283,23 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
         else:
             print("Fallback scraping returned no jobs.")
 
-    # ── Fallback: if no jobs have descriptions, load from DB jobs missing embeddings ──
-    if all_scraped and not skip_db and not any(job.get("description") for job in all_scraped):
-        print("--- Fallback: no scraped jobs have descriptions; loading from DB ---")
+    # ── Fallback: if no jobs in pool or none have descriptions, load from DB jobs missing embeddings ──
+    if not skip_db and (not all_scraped or not any(job.get("description") for job in all_scraped)):
+        print("--- Fallback: loading active DB jobs with descriptions missing embeddings ---")
         from app.fallback_scraping_instructions import _load_jobs_without_embeddings
         db_jobs = await _load_jobs_without_embeddings(dp, limit=db_limit)
+        if db_jobs:
+            print(f"Loaded {len(db_jobs)} jobs from DB with descriptions but no embeddings (deduplicating by link)...")
+            merged = {}
+            for job in all_scraped:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            for job in db_jobs:
+                link = job.get("link") or job.get("url") or ""
+                if link:
+                    merged[link] = job
+            all_scraped = list(merged.values())
         if db_jobs:
             print(f"Loaded {len(db_jobs)} jobs from DB with descriptions but no embeddings (deduplicating by link)...")
             merged = {}
@@ -306,6 +323,7 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
             
             db_desc_by_id = {}
             db_desc_by_link = {}
+            db_id_by_link = {}
             try:
                 if job_ids:
                     id_query = "SELECT id, job_summary FROM job WHERE id IN %s AND job_summary IS NOT NULL AND job_summary != ''"
@@ -316,13 +334,16 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
                         if rid is not None and rsum:
                             db_desc_by_id[rid] = rsum
                 if links:
-                    link_query = "SELECT link, job_summary FROM job WHERE link IN %s AND job_summary IS NOT NULL AND job_summary != ''"
+                    link_query = "SELECT id, link, job_summary FROM job WHERE link IN %s AND job_summary IS NOT NULL AND job_summary != ''"
                     link_rows = dp.conn.execute_sql(link_query, (tuple(links),), fetch=True) or []
                     for r in link_rows:
-                        rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
-                        rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                        rid = r.get("id") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
+                        rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                        rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[2]
                         if rlink and rsum:
                             db_desc_by_link[rlink] = rsum
+                        if rlink and rid is not None:
+                            db_id_by_link[rlink] = rid
             except Exception as e:
                 print(f"Warning: failed bulk description sync from DB: {e}")
                 
@@ -330,12 +351,40 @@ async def pipeline_stage_scrape(setup_data: dict, skip_db: bool = False,
             for job in jobs_needing_sync:
                 jid = job.get("id")
                 jlink = job.get("link") or job.get("url")
+                if not jid and jlink in db_id_by_link:
+                    job["id"] = db_id_by_link[jlink]
+                    jid = job["id"]
                 summary = db_desc_by_id.get(jid) if jid in db_desc_by_id else db_desc_by_link.get(jlink)
                 if summary and len(summary.strip()) > 50:
                     job["description"] = summary
                     sync_count += 1
             if sync_count > 0:
                 print(f"Synced {sync_count} job description(s) from database to memory.")
+
+        # Sync missing DB ids for any remaining jobs that have descriptions but no id
+        jobs_needing_id = [j for j in all_scraped if not j.get("id")]
+        if jobs_needing_id:
+            links_for_id = [j.get("link") or j.get("url") for j in jobs_needing_id if j.get("link") or j.get("url")]
+            if links_for_id:
+                try:
+                    id_query = "SELECT id, link FROM job WHERE link IN %s"
+                    id_rows = dp.conn.execute_sql(id_query, (tuple(links_for_id),), fetch=True) or []
+                    link_to_id = {}
+                    for r in id_rows:
+                        rid = r.get("id") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
+                        rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                        if rid is not None and rlink:
+                            link_to_id[rlink] = rid
+                    id_sync_count = 0
+                    for j in jobs_needing_id:
+                        jlink = j.get("link") or j.get("url")
+                        if jlink in link_to_id:
+                            j["id"] = link_to_id[jlink]
+                            id_sync_count += 1
+                    if id_sync_count > 0:
+                        print(f"Synced {id_sync_count} missing database job ID(s) by URL matching.")
+                except Exception as e:
+                    print(f"Warning: failed bulk id sync from DB: {e}")
 
     # ── Post-process: remove jobs without descriptions and log them ──
     if all_scraped:

@@ -165,7 +165,7 @@ def _normalize_to_pool_format(all_scraped: List[Dict]) -> List[Dict]:
     expected by downstream pipeline stages.
     
     Args:
-        all_scraped: List of raw job dicts from adapters (must have 'title' key).
+        all_scraped: List of raw job dicts from adapters (has 'title' or 'job_name' key).
     
     Returns:
         List[Dict] in the processed_job_pool format.
@@ -173,26 +173,41 @@ def _normalize_to_pool_format(all_scraped: List[Dict]) -> List[Dict]:
     processed_job_pool = []
     seen_ids = set()
     for idx, item in enumerate(all_scraped):
-        if not item or not item.get('title'):
+        if not item:
             continue
-        job_id = item.get('id', idx + 1000)
-        if job_id in seen_ids:
-            job_id = max(seen_ids) + 1 + idx
-        seen_ids.add(job_id)
+        title = item.get('title') or item.get('job_name') or ''
+        if not title:
+            continue
+        
+        has_real_id = item.get('id') is not None
+        if has_real_id:
+            job_id = item['id']
+            if job_id in seen_ids:
+                # Deduplicate: exact same DB job already in pool
+                continue
+            seen_ids.add(job_id)
+        else:
+            job_id = idx + 1000
+            while job_id in seen_ids:
+                job_id += 1
+            seen_ids.add(job_id)
+
         processed_job_pool.append({
             "metadata": {
                 "job_id": job_id,
                 "source": item.get('source', 'scraped'),
-                "in_db": 'id' in item,
+                "in_db": has_real_id,
+                "company_name": item.get('company_name') or item.get('company', 'Unknown'),
+                "link": item.get('link') or item.get('url', ''),
             },
             "features": {
-                "title": item.get('title', ''),
-                "description": item.get('description', ''),
-                "pay": item.get('pay', '') or item.get('pay_rate', ''),
-                "pay_rate": item.get('pay_rate', '') or item.get('pay', ''),
-                "seniority": "NA",
-                "work_type": item.get('flexibility', 'NA'),
-                "timezone": "NA",
+                "title": title,
+                "description": item.get('description', '') or item.get('job_summary', ''),
+                "pay": item.get('pay', '') or item.get('pay_rate', '') or item.get('pay_range', ''),
+                "pay_rate": item.get('pay_rate', '') or item.get('pay', '') or item.get('pay_range', ''),
+                "seniority": item.get('seniority', 'NA'),
+                "work_type": item.get('flexibility') or item.get('work_type', 'NA'),
+                "timezone": item.get('timezone', 'NA'),
                 "location": item.get('location', 'NA'),
                 "city": item.get('city', 'NA'),
                 "state": item.get('state', 'NA'),
@@ -226,14 +241,17 @@ def _check_run_fallback_flag(config_path: str) -> bool:
         return False
 
 
-async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, force_reprocess: bool = False) -> List[Dict]:
+async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, force_reprocess: bool = False, job_ids: Optional[List[int]] = None) -> List[Dict]:
     """
     Load jobs from the database for a specific stage, selecting only active jobs
     that have completed the prior stages but are missing the target stage's results.
     
-    When force_reprocess=True and stage==2, selects jobs that already have embeddings
-    (so they can be re-processed).
+    When job_ids is provided, loads specifically those job IDs.
+    When force_reprocess=True and stage==2, selects jobs to re-run Stage 2 extraction and embedding.
     """
+    if job_ids is not None and len(job_ids) == 0:
+        return []
+
     # Base query columns
     query_cols = [
         "j.id", "j.job_name", "c.company_name", "j.link", "j.job_summary", "j.description AS extracted_summary",
@@ -255,134 +273,10 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
         ])
         joins.append("LEFT JOIN job_embeddings je ON j.id = je.job_id")
     
-    where_clauses = ["j.skip IS NOT TRUE"]
-    
-    if not force_reprocess:
-        if stage < 8:
-            where_clauses.append("NOT EXISTS (SELECT 1 FROM strong_llm_results WHERE job_id = j.id)")
-        if stage < 6:
-            where_clauses.append("NOT EXISTS (SELECT 1 FROM cheap_llm_results WHERE job_id = j.id)")
-            
-    if stage > 2:
-        # For stages 3+, we need jobs that have completed Stage 2 (embeddings exist and are not NULL)
-        where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
-    elif stage == 2:
-        if force_reprocess:
-            # Reprocess: select jobs that already have embeddings to re-run Stage 2
-            where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
-        else:
-            # Normal: handled via separate optimized query branches below
-            pass
-        # Ensure we have a job description to embed
-        where_clauses.append("j.job_summary IS NOT NULL")
-    
-    # Add columns and joins depending on what stage we are starting at
-    if stage >= 6:
-        query_cols.extend([
-            "vs.semantic_score", "vs.title_similarity", "vs.requirements_similarity",
-            "vs.responsibility_similarity", "vs.adjusted_score", "vs.archetype_name AS best_archetype"
-        ])
-        joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
-        
-    if stage >= 7:
-        query_cols.extend([
-            "clr.fit_score AS cheap_fit_score", "clr.decision AS cheap_decision",
-            "clr.strengths AS cheap_strengths", "clr.concerns AS cheap_concerns",
-            "clr.hard_requirements_and_tools AS cheap_hard_requirements_and_tools",
-            "clr.core_responsibilities AS cheap_core_responsibilities",
-            "clr.years_of_experience AS cheap_years_of_experience",
-            "clr.domain_and_education AS cheap_domain_and_education",
-            "clr.raw_response AS cheap_raw_response"
-        ])
-        joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
-        
-    if stage >= 8:
-        query_cols.extend([
-            "slr.final_score AS strong_final_score", "slr.priority AS strong_priority",
-            "slr.apply_recommendation AS strong_apply_rec", "slr.red_flags AS strong_red_flags",
-            "slr.tailoring_notes AS strong_tailoring_notes", "slr.recruiter_bait_likelihood AS strong_bait",
-            "slr.detailed_fit_analysis AS strong_fit_analysis",
-            "slr.company_scale_fit AS strong_company_scale_fit",
-            "slr.career_trajectory AS strong_career_trajectory",
-            "slr.seniority_scope_calibration AS strong_seniority_scope_calibration",
-            "slr.hero_story_match AS strong_hero_story_match",
-            "slr.project_complexity AS strong_project_complexity",
-            "slr.shadow_work_friction AS strong_shadow_work_friction",
-            "slr.domain_business_model_friction AS strong_domain_business_model_friction",
-            "slr.recruiter_red_flags AS strong_recruiter_red_flags",
-            "slr.driving_points AS strong_driving_points",
-            "slr.raw_response AS strong_raw_response"
-        ])
-        joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
- 
-    # Add stage-specific filters (pull only if the current stage's result is missing)
-    if stage == 3:
-        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
-            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
-        where_clauses.append("vs.job_id IS NULL")
-    elif stage == 4 or stage == 5:
-        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
-            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
-        where_clauses.append("vs.job_id IS NULL")
-    elif stage == 6:
-        if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
-            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
-        if "LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id" not in joins:
-            joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
-        where_clauses.append("vs.job_id IS NOT NULL")
-        where_clauses.append("vs.adjusted_score >= 0.72")
-        where_clauses.append("clr.job_id IS NULL")
-    elif stage == 7:
-        if "LEFT JOIN strong_llm_results slr ON j.id = slr.job_id" not in joins:
-            joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
-        where_clauses.append("clr.decision IN ('apply', 'maybe')")
-        where_clauses.append("slr.job_id IS NULL")
-    elif stage == 8:
-        where_clauses.append("slr.job_id IS NOT NULL")
-        joins.append("LEFT JOIN final_application_queue faq ON j.id = faq.job_id")
-        where_clauses.append("faq.job_id IS NULL")
- 
-    if stage == 2 and not force_reprocess:
-        # Optimized path: split queries to avoid slow cross-table OR scans causing timeouts
-        where_ext = list(where_clauses)
-        where_ext.append("(j.description IS NULL OR j.requirements IS NULL)")
-        query_ext = f"""
-            SELECT {', '.join(query_cols)}
-            FROM job j
-            {' '.join(joins)}
-            WHERE {' AND '.join(where_ext)}
-            ORDER BY j.date_added DESC
-            LIMIT %s
-        """
-        
-        where_emb = list(where_clauses)
-        where_emb.append("NOT EXISTS (SELECT 1 FROM job_embeddings je WHERE je.job_id = j.id)")
-        query_emb = f"""
-            SELECT {', '.join(query_cols)}
-            FROM job j
-            {' '.join(joins)}
-            WHERE {' AND '.join(where_emb)}
-            ORDER BY j.date_added DESC
-            LIMIT %s
-        """
-        
-        try:
-            dp.conn.execute_sql("SET statement_timeout = 60000")
-            rows_ext = dp.conn.execute_sql(query_ext, (limit,), fetch=True) or []
-            rows_emb = dp.conn.execute_sql(query_emb, (limit,), fetch=True) or []
-            
-            seen_ids = set()
-            combined_rows = []
-            for r in rows_ext + rows_emb:
-                rid = r.get("id") if isinstance(r, dict) else r[0]
-                if rid not in seen_ids:
-                    seen_ids.add(rid)
-                    combined_rows.append(r)
-            rows = combined_rows[:limit]
-        except Exception as e:
-            print(f"Error querying DB for Stage {stage}: {e}")
-            return []
-    else:
+    # If explicit job_ids are given (e.g. from clear_jobs_for_reprocessing), load those exact jobs directly
+    if job_ids is not None:
+        effective_limit = max(len(job_ids), limit)
+        where_clauses = ["j.id = ANY(%s)", "j.job_summary IS NOT NULL"]
         query = f"""
             SELECT {', '.join(query_cols)}
             FROM job j
@@ -391,10 +285,9 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
             ORDER BY j.date_added DESC
             LIMIT %s
         """
-        
         try:
             dp.conn.execute_sql("SET statement_timeout = 60000")
-            raw_rows = dp.conn.execute_sql(query, (limit,), fetch=True) or []
+            raw_rows = dp.conn.execute_sql(query, (list(job_ids), effective_limit), fetch=True) or []
             seen_ids = set()
             deduped_rows = []
             for r in raw_rows:
@@ -404,8 +297,154 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
                     deduped_rows.append(r)
             rows = deduped_rows
         except Exception as e:
-            print(f"Error querying DB for Stage {stage}: {e}")
+            print(f"Error querying DB for Stage {stage} by job_ids: {e}")
             return []
+    else:
+        where_clauses = ["j.skip IS NOT TRUE"]
+        
+        if not force_reprocess:
+            if stage < 8:
+                where_clauses.append("NOT EXISTS (SELECT 1 FROM strong_llm_results WHERE job_id = j.id)")
+            if stage < 6:
+                where_clauses.append("NOT EXISTS (SELECT 1 FROM cheap_llm_results WHERE job_id = j.id)")
+                
+        if stage > 2:
+            # For stages 3+, we need jobs that have completed Stage 2 (embeddings exist and are not NULL)
+            where_clauses.append("je.job_id IS NOT NULL AND je.title_embedding IS NOT NULL")
+        elif stage == 2:
+            # Ensure we have a job description to embed
+            where_clauses.append("j.job_summary IS NOT NULL")
+        
+        # Add columns and joins depending on what stage we are starting at
+        if stage >= 6:
+            query_cols.extend([
+                "vs.semantic_score", "vs.title_similarity", "vs.requirements_similarity",
+                "vs.responsibility_similarity", "vs.adjusted_score", "vs.archetype_name AS best_archetype"
+            ])
+            joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+            
+        if stage >= 7:
+            query_cols.extend([
+                "clr.fit_score AS cheap_fit_score", "clr.decision AS cheap_decision",
+                "clr.strengths AS cheap_strengths", "clr.concerns AS cheap_concerns",
+                "clr.hard_requirements_and_tools AS cheap_hard_requirements_and_tools",
+                "clr.core_responsibilities AS cheap_core_responsibilities",
+                "clr.years_of_experience AS cheap_years_of_experience",
+                "clr.domain_and_education AS cheap_domain_and_education",
+                "clr.raw_response AS cheap_raw_response"
+            ])
+            joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
+            
+        if stage >= 8:
+            query_cols.extend([
+                "slr.final_score AS strong_final_score", "slr.priority AS strong_priority",
+                "slr.apply_recommendation AS strong_apply_rec", "slr.red_flags AS strong_red_flags",
+                "slr.tailoring_notes AS strong_tailoring_notes", "slr.recruiter_bait_likelihood AS strong_bait",
+                "slr.detailed_fit_analysis AS strong_fit_analysis",
+                "slr.company_scale_fit AS strong_company_scale_fit",
+                "slr.career_trajectory AS strong_career_trajectory",
+                "slr.seniority_scope_calibration AS strong_seniority_scope_calibration",
+                "slr.hero_story_match AS strong_hero_story_match",
+                "slr.project_complexity AS strong_project_complexity",
+                "slr.shadow_work_friction AS strong_shadow_work_friction",
+                "slr.domain_business_model_friction AS strong_domain_business_model_friction",
+                "slr.recruiter_red_flags AS strong_recruiter_red_flags",
+                "slr.driving_points AS strong_driving_points",
+                "slr.raw_response AS strong_raw_response"
+            ])
+            joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
+     
+        # Add stage-specific filters (pull only if the current stage's result is missing)
+        if stage == 3:
+            if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+                joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+            where_clauses.append("vs.job_id IS NULL")
+        elif stage == 4 or stage == 5:
+            if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+                joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+            where_clauses.append("vs.job_id IS NULL")
+        elif stage == 6:
+            if "LEFT JOIN vector_scores vs ON j.id = vs.job_id" not in joins:
+                joins.append("LEFT JOIN vector_scores vs ON j.id = vs.job_id")
+            if "LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id" not in joins:
+                joins.append("LEFT JOIN cheap_llm_results clr ON j.id = clr.job_id")
+            where_clauses.append("vs.job_id IS NOT NULL")
+            where_clauses.append("vs.adjusted_score >= 0.55")
+            where_clauses.append("clr.job_id IS NULL")
+        elif stage == 7:
+            if "LEFT JOIN strong_llm_results slr ON j.id = slr.job_id" not in joins:
+                joins.append("LEFT JOIN strong_llm_results slr ON j.id = slr.job_id")
+            where_clauses.append("clr.decision IN ('apply', 'maybe')")
+            where_clauses.append("slr.job_id IS NULL")
+        elif stage == 8:
+            where_clauses.append("slr.job_id IS NOT NULL")
+            joins.append("LEFT JOIN final_application_queue faq ON j.id = faq.job_id")
+            where_clauses.append("faq.job_id IS NULL")
+     
+        if stage == 2 and not force_reprocess:
+            # Optimized path: split queries to avoid slow cross-table OR scans causing timeouts
+            where_ext = list(where_clauses)
+            where_ext.append("(j.description IS NULL OR j.requirements IS NULL)")
+            query_ext = f"""
+                SELECT {', '.join(query_cols)}
+                FROM job j
+                {' '.join(joins)}
+                WHERE {' AND '.join(where_ext)}
+                ORDER BY j.date_added DESC
+                LIMIT %s
+            """
+            
+            where_emb = list(where_clauses)
+            where_emb.append("NOT EXISTS (SELECT 1 FROM job_embeddings je WHERE je.job_id = j.id)")
+            query_emb = f"""
+                SELECT {', '.join(query_cols)}
+                FROM job j
+                {' '.join(joins)}
+                WHERE {' AND '.join(where_emb)}
+                ORDER BY j.date_added DESC
+                LIMIT %s
+            """
+            
+            try:
+                dp.conn.execute_sql("SET statement_timeout = 60000")
+                rows_ext = dp.conn.execute_sql(query_ext, (limit,), fetch=True) or []
+                rows_emb = dp.conn.execute_sql(query_emb, (limit,), fetch=True) or []
+                
+                seen_ids = set()
+                combined_rows = []
+                for r in rows_ext + rows_emb:
+                    rid = r.get("id") if isinstance(r, dict) else r[0]
+                    if rid not in seen_ids:
+                        seen_ids.add(rid)
+                        combined_rows.append(r)
+                rows = combined_rows[:limit]
+            except Exception as e:
+                print(f"Error querying DB for Stage {stage}: {e}")
+                return []
+        else:
+            query = f"""
+                SELECT {', '.join(query_cols)}
+                FROM job j
+                {' '.join(joins)}
+                WHERE {' AND '.join(where_clauses)}
+                ORDER BY j.date_added DESC
+                LIMIT %s
+            """
+            
+            try:
+                dp.conn.execute_sql("SET statement_timeout = 60000")
+                raw_rows = dp.conn.execute_sql(query, (limit,), fetch=True) or []
+                seen_ids = set()
+                deduped_rows = []
+                for r in raw_rows:
+                    rid = r.get("id") if isinstance(r, dict) else r[0]
+                    if rid not in seen_ids:
+                        seen_ids.add(rid)
+                        deduped_rows.append(r)
+                rows = deduped_rows
+            except Exception as e:
+                print(f"Error querying DB for Stage {stage}: {e}")
+                return []
         
     if not rows:
         print(f"No jobs found in DB for Stage {stage} processing.")
@@ -427,6 +466,10 @@ async def _load_jobs_for_stage(dp: DataPuller, stage: int, limit: int = 50, forc
     jobs = []
     for row in rows:
         job = _row_to_job_dict(row)
+        if stage == 2 and force_reprocess:
+            if 'embeddings' in job:
+                job['embeddings']['requirements_vector'] = None
+                job['embeddings']['responsibilities_vector'] = None
         
         if stage >= 6:
             job['best_archetype'] = _get_val(row, "best_archetype")

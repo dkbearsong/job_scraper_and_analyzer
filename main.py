@@ -73,6 +73,7 @@ async def main(scrape_pages: Optional[int] = None,
                scrape_visible: bool = False,
                scrape_debug: bool = False,
                skip_part_a: Optional[bool] = None,
+               skip_job_boards: bool = False,
                stage_range: str = "0-8",
                db_limit: int = 50,
                skip_db: bool = False,
@@ -90,19 +91,25 @@ async def main(scrape_pages: Optional[int] = None,
         scrape_visible: Show browser window (disable headless).
         scrape_debug: Enable debug logging during scraping.
         skip_part_a: Skip Part A of legacy fallback scraping.
+        skip_job_boards: Skip all adapter and company board scraping and start directly from scraping job descriptions.
         stage_range: Inclusive stage range, e.g. "0-8", "2-4", "2".
         db_limit: Max records to pull from DB in any bulk-load operation.
         skip_db: Skip database operations for all stages.
         scrape_missing_24h: Only scrape descriptions for jobs from the last 24h.
-        reprocess: Number of days to go back in DB and clear for reprocessing (int or bool).
+        reprocess: Stage to start reprocessing at or number of days (e.g. 7, 6, 2, "7", "stage=7,days=2", True).
         recalculate_final_scores: Recalculate final scores from DB scores and exit.
         verbose: Enable verbose logging across pipeline stages.
 
     Returns:
         Pipeline result from the last executed stage.
     """
-    # ── Parse stage range ──
+    # ── Parse stage range & reprocess settings ──
     stage_start, stage_end = _parse_stage_range(stage_range)
+    reprocess_stage, reprocess_days = _parse_reprocess_arg(reprocess, stage_start=stage_start)
+
+    # If the user specified a reprocess stage without restricting -s (default "0-8"), align pipeline start
+    if reprocess_stage is not None and stage_range == "0-8":
+        stage_start = reprocess_stage
 
     print("=" * 60)
     _print_stage_header("JOB SCRAPING AND ANALYSIS PIPELINE", stage_start, stage_end)
@@ -123,20 +130,17 @@ async def main(scrape_pages: Optional[int] = None,
 
     _log_pipeline_stats("0: Setup", 0, source_hint="profile_extraction")
 
-    # ── Handle --reprocess days clearing ──
-    reprocess_days = 0
-    if reprocess is True:
-        reprocess_days = 1
-    elif isinstance(reprocess, int) and reprocess > 0:
-        reprocess_days = reprocess
-    elif isinstance(reprocess, str) and reprocess.isdigit():
-        reprocess_days = int(reprocess)
-
-    if reprocess_days > 0 and dp and not skip_db:
+    # ── Handle --reprocess clearing in DB ──
+    reprocessed_job_ids: List[int] = []
+    if reprocess_stage is not None and dp and not skip_db:
         print("\n" + "=" * 60)
-        print(f"[REPROCESS] CLEARING EXTRACTIONS & SCORES FOR THE LAST {reprocess_days} DAY(S)")
+        print(f"[REPROCESS] CLEARING STAGE {reprocess_stage}+ DATA FOR THE LAST {reprocess_days} DAY(S)")
         print("=" * 60)
-        dp.clear_jobs_for_reprocessing(days=reprocess_days)
+        cleared_result = dp.clear_jobs_for_reprocessing(stage=reprocess_stage, days=reprocess_days)
+        if isinstance(cleared_result, (list, tuple, set)):
+            reprocessed_job_ids = list(cleared_result)
+        elif hasattr(dp, "last_cleared_job_ids") and dp.last_cleared_job_ids:
+            reprocessed_job_ids = list(dp.last_cleared_job_ids)
 
     if recalculate_final_scores:
         if skip_db or not dp:
@@ -186,6 +190,7 @@ async def main(scrape_pages: Optional[int] = None,
             skip_part_a=skip_part_a,
             db_limit=db_limit,
             scrape_missing_24h=scrape_missing_24h,
+            skip_job_boards=skip_job_boards,
         )
         _log_pipeline_stats("1: Scrape", len(processed_job_pool), source_hint="adapters+fallback")
     elif stage_start > 1:
@@ -205,27 +210,29 @@ async def main(scrape_pages: Optional[int] = None,
 
     # Stage 2: Embedding Generation + LLM Extraction
     if 2 <= stage_end and stage_start <= 2:
-        # Load any jobs from DB that are missing embeddings (but have descriptions) and merge them
-        if not skip_db:
+        is_reprocess = bool(reprocess_stage and reprocess_stage <= 2)
+
+        if is_reprocess and reprocessed_job_ids and not skip_db and dp:
+            print(f"[REPROCESS] Loading all {len(reprocessed_job_ids)} cleared job(s) from DB to restart Stage 2...")
+            reprocess_jobs = await _load_jobs_for_stage(
+                dp, stage=2, limit=max(len(reprocessed_job_ids), db_limit),
+                force_reprocess=True, job_ids=reprocessed_job_ids
+            )
+            print(f"[REPROCESS] Loaded {len(reprocess_jobs)} jobs from DB for Stage 2.")
+            if processed_job_pool:
+                processed_job_pool = _merge_job_pools(processed_job_pool, reprocess_jobs)
+            else:
+                processed_job_pool = reprocess_jobs
+        elif not skip_db and dp:
+            # Load any jobs from DB that are missing embeddings (but have descriptions) and merge them
             print("Checking DB for any active jobs missing embeddings...")
             db_jobs = await _load_jobs_for_stage(dp, stage=2, limit=db_limit, force_reprocess=False)
             if db_jobs:
                 print(f"Found {len(db_jobs)} active jobs in DB missing embeddings. Merging them into the processing pool...")
-                merged = {}
-                for job in processed_job_pool:
-                    link = job.get("metadata", {}).get("link") or job.get("link") or ""
-                    if link:
-                        merged[link] = job
-                for job in db_jobs:
-                    link = job.get("metadata", {}).get("link") or job.get("link") or ""
-                    if link:
-                        if link not in merged:
-                            merged[link] = job
-                processed_job_pool = list(merged.values())
+                processed_job_pool = _merge_job_pools(processed_job_pool, db_jobs)
 
-        if not processed_job_pool:
+        if not processed_job_pool and not skip_db and dp:
             print("[INFO] No scraped jobs available. Attempting to load from DB for Stage 2 (Embed+Extract)...")
-            is_reprocess = reprocess
             processed_job_pool = await _load_jobs_for_stage(dp, stage=2, limit=db_limit, force_reprocess=is_reprocess)
             print(f"[INFO] Loaded {len(processed_job_pool)} jobs from DB.")
 
@@ -447,7 +454,7 @@ async def main(scrape_pages: Optional[int] = None,
         return processed_job_pool
 
 
-def _parse_stage_range(raw: str) -> Tuple[int, int]:
+def _parse_stage_range(raw: Optional[str]) -> Tuple[int, int]:
     """
     Parse a stage range string into an inclusive (start, end) tuple.
 
@@ -456,15 +463,17 @@ def _parse_stage_range(raw: str) -> Tuple[int, int]:
         "2-4"  -> (2, 4)
         "2"    -> (2, 2)
         "all"  -> (0, 8)
+        None   -> (0, 8)
 
     Returns:
         Tuple of (start_stage, end_stage), both inclusive.
     """
-    if raw.lower() in ("all", "full"):
+    if not raw or str(raw).lower() in ("all", "full"):
         return (0, 8)
 
-    if "-" in raw:
-        parts = raw.split("-", 1)
+    raw_str = str(raw).strip()
+    if "-" in raw_str:
+        parts = raw_str.split("-", 1)
         try:
             start = int(parts[0].strip())
             end = int(parts[1].strip())
@@ -473,7 +482,7 @@ def _parse_stage_range(raw: str) -> Tuple[int, int]:
             return (0, 8)
     else:
         try:
-            n = int(raw.strip())
+            n = int(raw_str)
             start = n
             end = n
         except ValueError:
@@ -487,6 +496,69 @@ def _parse_stage_range(raw: str) -> Tuple[int, int]:
         start, end = end, start
 
     return (start, end)
+
+def _parse_reprocess_arg(reprocess_val: Any, stage_start: int = 1) -> Tuple[Optional[int], int]:
+    """
+    Parses the reprocess CLI argument into (reprocess_stage, reprocess_days).
+    Returns (None, 0) if reprocessing is disabled.
+    """
+    if reprocess_val is None or reprocess_val is False or reprocess_val == 0 or reprocess_val == "0":
+        return None, 0
+
+    reprocess_stage = 2
+    reprocess_days = 1
+
+    if reprocess_val is True or (isinstance(reprocess_val, str) and reprocess_val.lower() in ("true", "yes")):
+        # If flag is given without value (e.g. --reprocess), use stage_start if >= 2 else 2
+        reprocess_stage = stage_start if stage_start >= 2 else 2
+        reprocess_days = 1
+    elif isinstance(reprocess_val, int):
+        if 2 <= reprocess_val <= 8:
+            reprocess_stage = reprocess_val
+            reprocess_days = 1
+        elif reprocess_val == 1:
+            reprocess_stage = stage_start if stage_start >= 2 else 2
+            reprocess_days = 1
+        else:
+            # If > 8, assume it was days for stage 2
+            reprocess_stage = 2
+            reprocess_days = reprocess_val
+    elif isinstance(reprocess_val, str):
+        val = reprocess_val.strip()
+        import re
+        stage_match = re.search(r"stage\s*=\s*(\d+)", val, re.IGNORECASE)
+        days_match = re.search(r"days?\s*=\s*(\d+)", val, re.IGNORECASE)
+
+        if stage_match or days_match:
+            if stage_match:
+                reprocess_stage = int(stage_match.group(1))
+            else:
+                reprocess_stage = stage_start if stage_start >= 2 else 2
+            if days_match:
+                reprocess_days = int(days_match.group(1))
+            else:
+                reprocess_days = 1
+        elif ":" in val:
+            parts = val.split(":")
+            reprocess_stage = int(parts[0]) if parts[0].isdigit() else 2
+            reprocess_days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        elif "," in val:
+            parts = val.split(",")
+            reprocess_stage = int(parts[0]) if parts[0].isdigit() else 2
+            reprocess_days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+        elif val.isdigit():
+            num = int(val)
+            if 2 <= num <= 8:
+                reprocess_stage = num
+                reprocess_days = 1
+            else:
+                reprocess_stage = 2
+                reprocess_days = num
+        else:
+            reprocess_stage = stage_start if stage_start >= 2 else 2
+            reprocess_days = 1
+
+    return reprocess_stage, reprocess_days
 
 
 def _print_stage_header(title: str, stage_start: int, stage_end: int) -> None:
@@ -548,6 +620,13 @@ if __name__ == "__main__":
         help="Skip Part A (company career-page scraping) in the legacy fallback path and jump straight to description scraping.",
     )
     parser.add_argument(
+        "--skip-job-boards",
+        "--scrape-descriptions-only",
+        action="store_true",
+        dest="skip_job_boards",
+        help="Skip adapter and company board scraping in Stage 1, starting directly from scraping job descriptions from DB, and continue through the pipeline.",
+    )
+    parser.add_argument(
         "-s", "--stage",
         type=str,
         default="0-8",
@@ -569,12 +648,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--reprocess",
-        type=int,
+        type=str,
         nargs="?",
-        const=1,
-        default=0,
+        const="true",
+        default=None,
         dest="reprocess",
-        help="Specify number of days to go back in the database to clear extractions, embeddings, vector scores, cheap LLM, strong LLM, and final queue results so jobs can be reprocessed through pipeline stages (default: 1 day if flag present without value).",
+        help="Specify stage to start reprocessing at (e.g. --reprocess 7, --reprocess 6, --reprocess 2, or 'stage=7,days=2'). Clears downstream data in records pulled for that day so stages can be re-run.",
     )
     parser.add_argument(
         "--recalculate-final-scores",
@@ -636,6 +715,7 @@ if __name__ == "__main__":
         scrape_visible=args.visible,
         scrape_debug=args.debug,
         skip_part_a=args.skip_part_a,
+        skip_job_boards=args.skip_job_boards,
         stage_range=args.stage_range,
         db_limit=args.db_limit,
         skip_db=args.skip_db,

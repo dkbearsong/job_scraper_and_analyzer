@@ -20,7 +20,7 @@ import random
 import re
 import time as time_module
 import glob
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 from app.prompt_injection_defender import sanitize_untrusted_text
@@ -458,8 +458,8 @@ def scrape_single_job_board(
         if not item.get("title") or item["title"] in ([None], ""):
             continue
         link = item.get("link")
-        if link and not link.startswith(("http", "https")):
-            link = f"{company_url}{link}"
+        if link and not link.startswith(("http://", "https://")):
+            link = urljoin(company_url, link)
         maker = {
             "company": item["company"]
             if item.get("company") is not None
@@ -539,6 +539,9 @@ async def scrape_sites(
     host = os.getenv("SCRAPER_HOST", "localhost")
     port = os.getenv("SCRAPER_PORT", "5052")
     endpoint = f"http://{host}:{port}/{api_method}"
+    micro_timeout = int(os.getenv("MICROSERVICE_TIMEOUT", "500"))
+    now_str = datetime.now().strftime("%H:%M:%S")
+    print(f"[{now_str}] [Scraper] [Part A] Dispatching '{company_name}' ({api_method}) -> {endpoint} (timeout: {micro_timeout}s, url: {strategy_url})")
     try:
         new_data = await _request_with_domain_backoff(
             dp.scrape_data,
@@ -762,7 +765,7 @@ async def scrape_job_descriptions(
                     url=job_url,
                     api_method="extract",
                 )
-                if result.get("status_code") == 200 and result.get("data"):
+                if result.get("data"):
                     data_list = result["data"]
                     if isinstance(data_list, list) and len(data_list) > 0:
                         first_item = data_list[0]
@@ -1111,6 +1114,11 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         description = ""
         parsed_pay = ""
         micro_timeout = int(os.getenv("MICROSERVICE_TIMEOUT", "500"))
+        host = os.getenv("SCRAPER_HOST", "localhost")
+        port = os.getenv("SCRAPER_PORT", "5052")
+        endpoint = f"http://{host}:{port}/{api_method}"
+        now_str = datetime.now().strftime("%H:%M:%S")
+        print(f"[{now_str}] [Scraper] [DB Desc] Requesting description for job {db_id} ({company_name or source}) via {api_method} -> {endpoint} (timeout: {micro_timeout}s)")
         async with global_semaphore:
             try:
                 result = await asyncio.wait_for(
@@ -1122,31 +1130,31 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
                     ),
                     timeout=micro_timeout,
                 )
-                if result.get("status_code") == 200 and result.get("data"):
-                    data_result = result["data"]
-                    if isinstance(data_result, list) and len(data_result) > 0:
-                        desc_key = next(
-                            (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
-                             if data_result[0].get(k)),
-                            None
+                data_result = result.get("data")
+                if isinstance(data_result, list) and len(data_result) > 0:
+                    desc_key = next(
+                        (k for k in ("description", "summary", "job-summary", "job_description", "job-description")
+                         if data_result[0].get(k)),
+                        None
+                    )
+                    if desc_key:
+                        desc_text = data_result[0].get(desc_key, "")
+                    else:
+                        # If no known key, take the first non-empty string value
+                        desc_text = next(
+                            (v for v in data_result[0].values()
+                             if isinstance(v, str) and len(v) > 50),
+                             ""
                         )
-                        if desc_key:
-                            desc_text = data_result[0].get(desc_key, "")
-                        else:
-                            # If no known key, take the first non-empty string value
-                            desc_text = next(
-                                (v for v in data_result[0].values()
-                                 if isinstance(v, str) and len(v) > 50),
-                                 ""
-                            )
-                        if desc_text and len(desc_text) > 50:
-                            description = sanitize_untrusted_text(desc_text)
+                    if desc_text and len(desc_text) > 50:
+                        description = sanitize_untrusted_text(desc_text)
 
-                        # Parse pay range if present in scraped page
-                        scraped_pay = data_result[0].get("pay_range") or data_result[0].get("pay") or data_result[0].get("pay_rate")
-                        if scraped_pay:
-                            parsed_pay = parse_pay_range(scraped_pay)
-                else:
+                    # Parse pay range if present in scraped page
+                    scraped_pay = data_result[0].get("pay_range") or data_result[0].get("pay") or data_result[0].get("pay_rate")
+                    if scraped_pay:
+                        parsed_pay = parse_pay_range(scraped_pay)
+
+                if not description and (result.get("status_code") not in (200, "200") or not result.get("data")):
                     status_code = str(result.get("status_code", "UNKNOWN"))
                     error_msg = result.get("error", "")
                     exception_msg = result.get("exception", "")
@@ -1230,13 +1238,35 @@ async def _scrape_job_descriptions_from_db_impl(data: list, dp: DataPuller, verb
         await asyncio.gather(*tasks)
 
     # Post-process in-memory data: Enrich descriptions and pay
+    existing_urls = set()
     for item in data:
         item_url = item.get("url") or item.get("link")
+        if item_url:
+            existing_urls.add(item_url)
         if item_url in enriched_descriptions:
             item["description"] = enriched_descriptions[item_url]
         if item_url in enriched_pays:
             item["pay"] = enriched_pays[item_url]
             item["pay_rate"] = enriched_pays[item_url]
+
+    # For any DB jobs that were enriched but were not in initial data (e.g. if company boards were skipped),
+    # add them into the returned data list so downstream stages can process them
+    for job in jobs_without_desc:
+        url = job.get("url")
+        if url and url in enriched_descriptions and url not in existing_urls:
+            data.append({
+                "id": job.get("db_id"),
+                "job_name": job.get("title", ""),
+                "company_name": job.get("company", ""),
+                "source": job.get("source", "scraped"),
+                "link": url,
+                "url": url,
+                "description": enriched_descriptions[url],
+                "pay": enriched_pays.get(url, ""),
+                "pay_rate": enriched_pays.get(url, ""),
+                "date_added": job.get("date"),
+            })
+            existing_urls.add(url)
     
     # Filter out skipped jobs from the list
     skipped_urls = {item.get("url") or item.get("link") for item in skipped_jobs if item.get("url") or item.get("link")}
@@ -1398,20 +1428,30 @@ async def _process_jobs_without_descriptions(results: list, dp: DataPuller) -> l
                     if rid is not None and rsum:
                         db_desc_by_id[rid] = rsum
             if links:
-                link_query = "SELECT link, job_summary FROM job WHERE link IN %s AND job_summary IS NOT NULL AND job_summary != ''"
+                link_query = "SELECT id, link, job_summary FROM job WHERE link IN %s AND job_summary IS NOT NULL AND job_summary != ''"
                 link_rows = await _safe_db_call(dp.conn.execute_sql, link_query, (tuple(links),), fetch=True) or []
                 for r in link_rows:
-                    rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
-                    rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                    rid = r.get("id") if (isinstance(r, dict) or hasattr(r, 'get')) else r[0]
+                    rlink = r.get("link") if (isinstance(r, dict) or hasattr(r, 'get')) else r[1]
+                    rsum = r.get("job_summary") if (isinstance(r, dict) or hasattr(r, 'get')) else r[2]
                     if rlink and rsum:
                         db_desc_by_link[rlink] = rsum
+                    if rlink and rid is not None:
+                        db_desc_by_id[rid] = rsum
+                        db_id_by_link = getattr(db_desc_by_link, '_id_map', {})
+                        db_id_by_link[rlink] = rid
+                        db_desc_by_link._id_map = db_id_by_link
         except Exception as e:
             print(f"Warning: failed bulk lookup in _process_jobs_without_descriptions: {e}")
 
+    id_map = getattr(db_desc_by_link, '_id_map', {})
     for idx in missing_indices:
         job = results[idx]
         jid = job.get("id")
         jlink = job.get("link") or job.get("url")
+        if not jid and jlink in id_map:
+            job["id"] = id_map[jlink]
+            jid = job["id"]
         summary = db_desc_by_id.get(jid) if jid in db_desc_by_id else db_desc_by_link.get(jlink)
 
         if summary and len(summary.strip()) > 50:

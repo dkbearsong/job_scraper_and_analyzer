@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Dict, List, Tuple
 from openai import OpenAI
 from anthropic import Anthropic
@@ -642,8 +643,8 @@ class CheapLLMClassifier:
                 return self._validate_result(result)
                 
             except Exception as e:
-                from app.ai_engine import is_rate_limit_exception
-                if is_rate_limit_exception(e):
+                from app.ai_engine import is_rate_limit_exception, is_transient_ai_exception
+                if is_rate_limit_exception(e) or is_transient_ai_exception(e):
                     raise
                 print(f"[CheapLLMClassifier Error] Attempt {attempt}/{1 + max_retries} failed: {e}")
                 if attempt <= max_retries:
@@ -961,8 +962,8 @@ class StrongLLMReranker:
                 return self._validate_result(result)
                 
             except Exception as e:
-                from app.ai_engine import is_rate_limit_exception
-                if is_rate_limit_exception(e):
+                from app.ai_engine import is_rate_limit_exception, is_transient_ai_exception
+                if is_rate_limit_exception(e) or is_transient_ai_exception(e):
                     raise
                 print(f"[StrongLLMReranker Error] Attempt {attempt}/{1 + max_retries} failed: {e}")
                 if attempt <= max_retries:

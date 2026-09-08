@@ -233,10 +233,7 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
                     did_skip_due_to_rate_limit = True
                     break
 
-            elif status == 200 and scraper_response.get("data"):
-                # Success — reset 429 count for this domain
-                _domain_429_count[parsed_domain] = 0
-
+            elif scraper_response.get("data"):
                 data_result = scraper_response["data"]
                 if isinstance(data_result, list) and len(data_result) > 0:
                     desc_key = next(
@@ -253,7 +250,14 @@ async def scrape_missing_descriptions_24h(dp: DataPuller, verbose: bool = False)
                         )
                     if desc_text and len(desc_text) > 50:
                         description = desc_text
-                break  # success — exit retry loop
+                        _domain_429_count[parsed_domain] = 0
+                        break  # success — exit retry loop
+
+                if status in (200, "200"):
+                    _domain_429_count[parsed_domain] = 0
+                    break
+                else:
+                    break
             else:
                 # Non-429 error (4xx, 5xx, etc.) — do not retry, just mark as skip
                 break

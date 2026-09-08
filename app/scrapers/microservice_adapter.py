@@ -16,6 +16,7 @@ import re
 import time
 from random import random
 from typing import Any, Dict, List, Optional
+from urllib.parse import urljoin
 
 import aiohttp
 
@@ -251,8 +252,8 @@ class MicroserviceAdapter(ScraperAdapter):
 
             # Build link URL
             link = item.get("link")
-            if link and not link.startswith(("http", "https")):
-                link = f"{company_url}{link}"
+            if link and not link.startswith(("http://", "https://")):
+                link = urljoin(company_url, link)
 
             # Clean location (remove "location" prefix if present)
             location = item.get("location")

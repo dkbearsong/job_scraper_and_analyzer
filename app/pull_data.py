@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from random import random
 from datetime import date
 from collections import defaultdict
-from typing import Optional
+from typing import Optional, List, Dict, Any, Tuple
 
 # Modules
 from app.postgres_mgr import PostgresManager
@@ -246,7 +246,7 @@ class DataPuller:
             api_method = "extract-js" if test_payload.get("js_config") is not None else "extract"
             try:
                 result = await self.scrape_data(test_payload, api_method=api_method)
-                if result.get("status_code") == 200 and result.get("data"):
+                if result.get("data"):
                     data_result = result["data"]
                     if isinstance(data_result, list) and len(data_result) > 0:
                         desc_key = next(
@@ -543,15 +543,18 @@ class DataPuller:
                     pay_embedding = COALESCE(EXCLUDED.pay_embedding, job_embeddings.pay_embedding),
                     location_embedding = COALESCE(EXCLUDED.location_embedding, job_embeddings.location_embedding)
             """
-            self.conn.execute_sql(upsert_sql, params=(
-                job_id,
-                data.get("title_embedding"),
-                data.get("requirements_embedding"),
-                data.get("responsibilities_embedding"),
-                data.get("description_embedding"),
-                data.get("pay_embedding"),
-                data.get("location_embedding")
-            ), dbname=self.dbname)
+            try:
+                self.conn.execute_sql(upsert_sql, params=(
+                    job_id,
+                    data.get("title_embedding"),
+                    data.get("requirements_embedding"),
+                    data.get("responsibilities_embedding"),
+                    data.get("description_embedding"),
+                    data.get("pay_embedding"),
+                    data.get("location_embedding")
+                ), dbname=self.dbname)
+            except Exception as e:
+                print(f"[Warning] Failed to save embeddings for job {job_id}: {e}. Skipping this job.")
 
     def bulk_create_table(self, create_sql: str, table_name: str = ""):
         """Creates a table if it doesn't exist using the established connection."""
@@ -598,16 +601,19 @@ class DataPuller:
                                                responsibility_similarity, adjusted_score, rank)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """
-                self.conn.execute_sql(insert_sql, params=(
-                    job_id,
-                    job.get('best_archetype', ''),
-                    job.get('semantic_score', 0),
-                    job.get('title_similarity', 0),
-                    job.get('requirements_similarity', 0),
-                    job.get('responsibility_similarity', 0),
-                    job.get('adjusted_score', 0),
-                    rank
-                ), dbname=self.dbname)
+                try:
+                    self.conn.execute_sql(insert_sql, params=(
+                        job_id,
+                        job.get('best_archetype', ''),
+                        job.get('semantic_score', 0),
+                        job.get('title_similarity', 0),
+                        job.get('requirements_similarity', 0),
+                        job.get('responsibility_similarity', 0),
+                        job.get('adjusted_score', 0),
+                        rank
+                    ), dbname=self.dbname)
+                except Exception as e:
+                    print(f"[Warning] Failed to insert vector score for job {job_id}: {e}. Skipping.")
             else:
                 upsert_sql = """
                     INSERT INTO vector_scores (job_id, archetype_name, semantic_score,
@@ -624,16 +630,19 @@ class DataPuller:
                         rank = EXCLUDED.rank,
                         created_at = CURRENT_TIMESTAMP
                 """
-                self.conn.execute_sql(upsert_sql, params=(
-                    job_id,
-                    job.get('best_archetype', ''),
-                    job.get('semantic_score', 0),
-                    job.get('title_similarity', 0),
-                    job.get('requirements_similarity', 0),
-                    job.get('responsibility_similarity', 0),
-                    job.get('adjusted_score', 0),
-                    rank
-                ), dbname=self.dbname)
+                try:
+                    self.conn.execute_sql(upsert_sql, params=(
+                        job_id,
+                        job.get('best_archetype', ''),
+                        job.get('semantic_score', 0),
+                        job.get('title_similarity', 0),
+                        job.get('requirements_similarity', 0),
+                        job.get('responsibility_similarity', 0),
+                        job.get('adjusted_score', 0),
+                        rank
+                    ), dbname=self.dbname)
+                except Exception as e:
+                    print(f"[Warning] Failed to upsert vector score for job {job_id}: {e}. Skipping.")
 
     def save_token_usage(self, run_id: str, run_timestamp, records: list):
         """Saves LLM token usage records for a run to the database."""
@@ -685,18 +694,21 @@ class DataPuller:
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            self.conn.execute_sql(insert_sql, params=(
-                job['metadata']['job_id'],
-                cheap_result.get('fit_score', 50),
-                cheap_result.get('decision', 'maybe'),
-                json.dumps(cheap_result.get('strengths', [])),
-                json.dumps(cheap_result.get('concerns', [])),
-                json.dumps(cheap_result.get('hard_requirements_and_tools', [])),
-                json.dumps(cheap_result.get('core_responsibilities', [])),
-                json.dumps(cheap_result.get('years_of_experience', {})),
-                json.dumps(cheap_result.get('domain_and_education', {})),
-                json.dumps(cheap_result.get('raw_response', {}))
-            ), dbname=self.dbname)
+            try:
+                self.conn.execute_sql(insert_sql, params=(
+                    job['metadata']['job_id'],
+                    cheap_result.get('fit_score', 50),
+                    cheap_result.get('decision', 'maybe'),
+                    json.dumps(cheap_result.get('strengths', [])),
+                    json.dumps(cheap_result.get('concerns', [])),
+                    json.dumps(cheap_result.get('hard_requirements_and_tools', [])),
+                    json.dumps(cheap_result.get('core_responsibilities', [])),
+                    json.dumps(cheap_result.get('years_of_experience', {})),
+                    json.dumps(cheap_result.get('domain_and_education', {})),
+                    json.dumps(cheap_result.get('raw_response', {}))
+                ), dbname=self.dbname)
+            except Exception as e:
+                print(f"[Warning] Failed to save cheap LLM result for job {job['metadata']['job_id']}: {e}. Skipping.")
 
     def save_strong_llm_results(self, deeply_analyzed_jobs: list):
         """Persists Stage 7 strong LLM results to the strong_llm_results table."""
@@ -746,26 +758,29 @@ class DataPuller:
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            self.conn.execute_sql(insert_sql, params=(
-                job['metadata']['job_id'],
-                strong_result.get('final_score', 50),
-                strong_result.get('priority', 'medium'),
-                strong_result.get('apply_recommendation', 'maybe'),
-                json.dumps(legacy_flags),
-                json.dumps(strong_result.get('tailoring_notes', [])),
-                strong_result.get('recruiter_bait_likelihood', 'medium'),
-                strong_result.get('detailed_fit_analysis', ''),
-                json.dumps(strong_result.get('company_scale_fit', {})),
-                json.dumps(strong_result.get('career_trajectory', {})),
-                json.dumps(strong_result.get('seniority_scope_calibration', {})),
-                json.dumps(strong_result.get('hero_story_match', {})),
-                json.dumps(strong_result.get('project_complexity', {})),
-                json.dumps(strong_result.get('shadow_work_friction', {})),
-                json.dumps(strong_result.get('domain_business_model_friction', {})),
-                json.dumps(recruiter_flags),
-                json.dumps(strong_result.get('driving_points', [])),
-                json.dumps(strong_result.get('raw_response', {}))
-            ), dbname=self.dbname)
+            try:
+                self.conn.execute_sql(insert_sql, params=(
+                    job['metadata']['job_id'],
+                    strong_result.get('final_score', 50),
+                    strong_result.get('priority', 'medium'),
+                    strong_result.get('apply_recommendation', 'maybe'),
+                    json.dumps(legacy_flags),
+                    json.dumps(strong_result.get('tailoring_notes', [])),
+                    strong_result.get('recruiter_bait_likelihood', 'medium'),
+                    strong_result.get('detailed_fit_analysis', ''),
+                    json.dumps(strong_result.get('company_scale_fit', {})),
+                    json.dumps(strong_result.get('career_trajectory', {})),
+                    json.dumps(strong_result.get('seniority_scope_calibration', {})),
+                    json.dumps(strong_result.get('hero_story_match', {})),
+                    json.dumps(strong_result.get('project_complexity', {})),
+                    json.dumps(strong_result.get('shadow_work_friction', {})),
+                    json.dumps(strong_result.get('domain_business_model_friction', {})),
+                    json.dumps(recruiter_flags),
+                    json.dumps(strong_result.get('driving_points', [])),
+                    json.dumps(strong_result.get('raw_response', {}))
+                ), dbname=self.dbname)
+            except Exception as e:
+                print(f"[Warning] Failed to save strong LLM result for job {job['metadata']['job_id']}: {e}. Skipping.")
 
     def save_final_queue(self, final_queue: list):
         """Persists Stage 8 final application queue to the final_application_queue table."""
@@ -794,13 +809,16 @@ class DataPuller:
                     queue_position = EXCLUDED.queue_position,
                     created_at = CURRENT_TIMESTAMP
             """
-            self.conn.execute_sql(insert_sql, params=(
-                job['metadata']['job_id'],
-                job.get('final_score', 0),
-                job.get('priority', 'medium'),
-                job.get('apply_recommendation', 'maybe'),
-                position
-            ), dbname=self.dbname)
+            try:
+                self.conn.execute_sql(insert_sql, params=(
+                    job['metadata']['job_id'],
+                    job.get('final_score', 0),
+                    job.get('priority', 'medium'),
+                    job.get('apply_recommendation', 'maybe'),
+                    position
+                ), dbname=self.dbname)
+            except Exception as e:
+                print(f"[Warning] Failed to save final application queue for job {job['metadata']['job_id']}: {e}. Skipping.")
 
     def get_archetype_embeddings(self, name: str):
         """Retrieves cached archetype embeddings from the database."""
@@ -895,56 +913,166 @@ class DataPuller:
             pass
         return None
 
-    def clear_jobs_for_reprocessing(self, days: int) -> int:
+    def clear_jobs_for_reprocessing(self, stage: int = 2, days: int = 1) -> List[int]:
         """
-        Clears extractions, embeddings, vector scores, cheap LLM results, strong LLM results,
-        and final queue entries for jobs added in the last `days` days. Resets skip status to FALSE
-        so jobs can be reprocessed through pipeline stages.
+        Clears data in records for jobs added in the last `days` day(s) that the given `stage` needs
+        in order to re-classify/re-process them, disabling the skip flag.
+
+        - Stage 7: Looks for jobs pulled in that timeframe with a cheap LLM score/decision above threshold,
+          removes records from strong_llm_results and final_application_queue, and sets skip = FALSE.
+        - Stage 6: Looks for jobs pulled in that timeframe with vector scores above threshold,
+          clears cheap_llm_results, strong_llm_results, final_application_queue, and sets skip = FALSE.
+        - Stage 3/4/5: Clears vector_scores, cheap_llm_results, strong_llm_results, final_application_queue,
+          resets score/rating columns, and sets skip = FALSE.
+        - Stage 2: Checks for jobs scraped that day (date_added = CURRENT_DATE when days=1),
+          disables their skip flag (skip = FALSE), deletes requirements and responsibilities on jobs,
+          and deletes matching records from vector_scores, cheap_llm_results, strong_llm_results,
+          and final_application_queue (preserves job_summary descriptions and job_embeddings).
         """
+        self.last_cleared_job_ids = []
         if days <= 0:
-            return 0
+            return []
 
-        print(f"[DataPuller] Finding jobs added in the last {days} day(s)...")
-        find_query = "SELECT id FROM job WHERE date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;"
-        rows = self.conn.execute_sql(find_query, (days,), fetch=True)
-        if not rows:
-            print(f"[DataPuller] No jobs found added in the last {days} day(s).")
-            return 0
+        print(f"[DataPuller] Finding jobs added in the last {days} day(s) for Stage {stage} reprocessing...")
 
-        job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
-        print(f"[DataPuller] Found {len(job_ids)} jobs added in the last {days} day(s) to clear for reprocessing.")
+        if stage >= 7:
+            # Stage 7: Find jobs pulled in timeframe that passed Stage 6 (cheap LLM decision 'apply'/'maybe' or high fit score)
+            find_query = """
+                SELECT DISTINCT j.id FROM job j
+                JOIN cheap_llm_results clr ON j.id = clr.job_id
+                WHERE j.date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL
+                  AND (clr.decision IN ('apply', 'maybe') OR clr.fit_score >= 50);
+            """
+            rows = self.conn.execute_sql(find_query, (days,), fetch=True)
+            if not rows:
+                # Fallback: check if any jobs have cheap LLM results in that timeframe
+                find_query_fallback = """
+                    SELECT DISTINCT j.id FROM job j
+                    JOIN cheap_llm_results clr ON j.id = clr.job_id
+                    WHERE j.date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;
+                """
+                rows = self.conn.execute_sql(find_query_fallback, (days,), fetch=True)
 
-        id_list = list(job_ids)
+            if not rows:
+                print(f"[DataPuller] No qualifying jobs with cheap LLM scores found in the last {days} day(s) to clear for Stage {stage}.")
+                return []
 
-        # 1. Clear job_embeddings
-        self.conn.execute_sql("DELETE FROM job_embeddings WHERE job_id = ANY(%s);", (id_list,))
-        # 2. Clear vector_scores
-        self.conn.execute_sql("DELETE FROM vector_scores WHERE job_id = ANY(%s);", (id_list,))
-        # 3. Clear cheap_llm_results
-        self.conn.execute_sql("DELETE FROM cheap_llm_results WHERE job_id = ANY(%s);", (id_list,))
-        # 4. Clear strong_llm_results
-        self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
-        # 5. Clear final_application_queue
-        self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+            job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+            id_list = list(job_ids)
+            self.last_cleared_job_ids = id_list
+            print(f"[DataPuller] Found {len(id_list)} job(s) with qualifying cheap LLM scores to clear for Stage 7.")
 
-        # 6. Reset columns in job table so extractions & rule filtering are re-evaluated
-        reset_query = """
-            UPDATE job
-            SET skip = FALSE,
-                requirements = NULL,
-                responsibilities = NULL,
-                job_summary = NULL,
-                skills_to_work_on = NULL,
-                my_title_score = NULL,
-                my_summary_score = NULL,
-                title_rating = NULL,
-                summary_rating = NULL,
-                jsr_reasoning = NULL
-            WHERE id = ANY(%s);
-        """
-        self.conn.execute_sql(reset_query, (id_list,))
-        print(f"[DataPuller] Successfully cleared extractions, embeddings, vector scores, and LLM results for {len(job_ids)} job(s).")
-        return len(job_ids)
+            # Remove records from strong LLM rank and final queue tables
+            self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+            # Disable skip flag
+            self.conn.execute_sql("UPDATE job SET skip = FALSE WHERE id = ANY(%s);", (id_list,))
+            print(f"[DataPuller] Successfully cleared strong LLM results and final queue for {len(id_list)} job(s) (skip flag disabled).")
+            return id_list
+
+        elif stage == 6:
+            # Stage 6: Find jobs pulled in timeframe that have vector scores above threshold
+            find_query = """
+                SELECT DISTINCT j.id FROM job j
+                JOIN vector_scores vs ON j.id = vs.job_id
+                WHERE j.date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL
+                  AND (vs.adjusted_score >= 0.50 OR vs.semantic_score >= 0.50);
+            """
+            rows = self.conn.execute_sql(find_query, (days,), fetch=True)
+            if not rows:
+                # Fallback: check if any jobs have vector scores in that timeframe
+                find_query_fallback = """
+                    SELECT DISTINCT j.id FROM job j
+                    JOIN vector_scores vs ON j.id = vs.job_id
+                    WHERE j.date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;
+                """
+                rows = self.conn.execute_sql(find_query_fallback, (days,), fetch=True)
+
+            if not rows:
+                print(f"[DataPuller] No qualifying jobs with vector scores found in the last {days} day(s) to clear for Stage {stage}.")
+                return []
+
+            job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+            id_list = list(job_ids)
+            self.last_cleared_job_ids = id_list
+            print(f"[DataPuller] Found {len(id_list)} job(s) with qualifying vector scores to clear for Stage 6.")
+
+            # Clear cheap LLM, strong LLM, and final queue tables
+            self.conn.execute_sql("DELETE FROM cheap_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+            # Disable skip flag
+            self.conn.execute_sql("UPDATE job SET skip = FALSE WHERE id = ANY(%s);", (id_list,))
+            print(f"[DataPuller] Successfully cleared cheap/strong LLM results and final queue for {len(id_list)} job(s) (skip flag disabled).")
+            return id_list
+
+        elif stage in (3, 4, 5):
+            # Stages 3-5: Clear vector scores and all downstream LLM results
+            find_query = "SELECT id FROM job WHERE date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;"
+            rows = self.conn.execute_sql(find_query, (days,), fetch=True)
+            if not rows:
+                print(f"[DataPuller] No jobs found added in the last {days} day(s).")
+                return []
+
+            job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+            id_list = list(job_ids)
+            self.last_cleared_job_ids = id_list
+            print(f"[DataPuller] Found {len(id_list)} job(s) to clear for Stage {stage}.")
+
+            self.conn.execute_sql("DELETE FROM vector_scores WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM cheap_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+
+            reset_query = """
+                UPDATE job
+                SET skip = FALSE,
+                    my_title_score = NULL,
+                    my_summary_score = NULL,
+                    title_rating = NULL,
+                    summary_rating = NULL,
+                    jsr_reasoning = NULL
+                WHERE id = ANY(%s);
+            """
+            self.conn.execute_sql(reset_query, (id_list,))
+            print(f"[DataPuller] Successfully cleared vector scores and LLM results for {len(id_list)} job(s) (skip flag disabled).")
+            return id_list
+
+        else:
+            # Stage <= 2 (default): Clear extractions and downstream scores for jobs scraped that day
+            if days <= 1:
+                find_query = "SELECT id FROM job WHERE date_added = CURRENT_DATE;"
+                rows = self.conn.execute_sql(find_query, fetch=True)
+            else:
+                find_query = "SELECT id FROM job WHERE date_added >= CURRENT_DATE - (%s || ' days')::INTERVAL;"
+                rows = self.conn.execute_sql(find_query, (days - 1,), fetch=True)
+
+            if not rows:
+                print(f"[DataPuller] No jobs found added in the specified timeframe.")
+                return []
+
+            job_ids = [r['id'] if isinstance(r, dict) else r[0] for r in rows]
+            id_list = list(job_ids)
+            self.last_cleared_job_ids = id_list
+            print(f"[DataPuller] Found {len(id_list)} job(s) added in the specified timeframe to clear for Stage {stage}.")
+
+            # Delete matching records from downstream score tables
+            self.conn.execute_sql("DELETE FROM vector_scores WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM cheap_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM strong_llm_results WHERE job_id = ANY(%s);", (id_list,))
+            self.conn.execute_sql("DELETE FROM final_application_queue WHERE job_id = ANY(%s);", (id_list,))
+
+            # Disable skip flag and delete requirements and responsibilities on jobs (preserving job_summary descriptions)
+            reset_query = """
+                UPDATE job
+                SET skip = FALSE,
+                    requirements = NULL,
+                    responsibilities = NULL
+                WHERE id = ANY(%s);
+            """
+            self.conn.execute_sql(reset_query, (id_list,))
+            print(f"[DataPuller] Successfully cleared requirements/responsibilities, disabled skip flag, and cleared downstream scores for {len(id_list)} job(s).")
+            return id_list
 
 
 def main():
